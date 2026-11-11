@@ -1,0 +1,33 @@
+# Dependensi (proyek ini sengaja tanpa dependensi, tapi tetap diabaikan)
+node_modules/
+
+# Hasil build
+dist/
+build/
+
+# Database hasil migrasi / uji
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# Log
+*.log
+npm-debug.log*
+
+# Cache
+.cache/
+*.tsbuildinfo
+
+# Editor & OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Berkas uji sementara
+*.tmp
+tmp/
+.temp/

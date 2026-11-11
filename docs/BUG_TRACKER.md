@@ -733,6 +733,56 @@ Status: `Fixed` (perbaikan diterapkan dan ada regression test), `Open`
 
 ---
 
+## BNG-039 — Bundel client gagal total di browser karena memakai `require`
+
+- **Tanggal**: 2026-11-11
+- **Komponen**: `compiler/bundler.js`
+- **Severity**: Critical
+- **Deskripsi**: Frontend aplikasi demo gagal total di browser. Halaman
+  memuat HTML dan CSS dengan benar, tetapi tidak ada data yang muncul dan
+  tombol tidak berfungsi. Console browser melaporkan:
+  `Uncaught ReferenceError: require is not defined`.
+  Sumber: `http://127.0.0.1:3000/client.js` baris 16.
+- **Root cause**: Dua hal yang saling terkait:
+  1. Bundel client memakai loader Node yang memanggil `require(...)`
+     sebagai argumen ketiga ke factory modul. `require` tidak ada di
+     browser, jadi setiap impor gagal saat modul dievaluasi.
+  2. Modul runtime client dipetakan ke `require("./bonang-client.js")`,
+     tetapi `copyRuntime(outDir, 'client')` tidak pernah dipanggil pada
+     target client — berkasnya tidak ada di folder output. Bahkan kalau
+     `require` tersedia, file itu tetap tidak akan ditemukan.
+
+  Kedua hal ini lolos dari test karena seluruh suite berjalan di Node,
+  di mana `require` selalu ada. Test hanya memeriksa file output ada,
+  tidak pernah menjalankan hasilnya di browser.
+- **Perbaikan**: Bundel client sekarang punya loader sendiri yang tidak
+  memakai `require` sama sekali, dan runtime client **di-inline-kan**
+  ke dalam bundel sebagai modul internal
+  (`__bng_client_runtime`) sehingga frontend cukup satu file.
+  `rewriteRequires` kini menerima flag `isClient`:
+  - `bonang/client` -> `__bngRequire("__bng_client_runtime")`
+  - modul Node bawaan (`node:*`) -> **ditolak saat build** dengan pesan
+    yang menyebut nama modulnya
+  - `bonang` (runtime server) dan `bonang/std` -> ditolak, hanya tersedia
+    di server
+  - paket eksternal -> ditolak
+
+  Menolak saat build jauh lebih baik daripada melempar
+  `require is not defined` di console browser milik pengguna.
+- **Fix applied**: Ya.
+- **Regression test**: `tests/tools/bundler.test.js` — 7 test:
+  1. bundel client tidak boleh memuat `require(`
+  2. runtime client harus ter-inline (`IndexedDBStore`, `SyncQueue`)
+  3. modul Node bawaan ditolak saat build
+  4. runtime server ditolak saat build
+  5. paket eksternal ditolak saat build
+  6. bundel server tetap memakai `require` Node (perbaikan tidak boleh
+     merusak target server)
+  7. pesan error menyebut modul yang bermasalah
+- **Status**: Fixed
+
+---
+
 ## Ringkasan
 
 | ID | Komponen | Severity | Status |
@@ -775,8 +825,9 @@ Status: `Fixed` (perbaikan diterapkan dan ada regression test), `Open`
 | BNG-036 | Query builder | High | Fixed |
 | BNG-037 | CLI scaffold | Medium | Fixed |
 | BNG-038 | Test tooling | Medium | Fixed |
+| BNG-039 | Bundler | Critical | Fixed |
 
-**Total: 38 bug tercatat, 38 Fixed, 0 Open.**
+**Total: 39 bug tercatat, 39 Fixed, 0 Open.**
 
 Siklus yang dipakai setiap kali bug ditemukan:
 

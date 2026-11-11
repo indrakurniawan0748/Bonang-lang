@@ -86,14 +86,14 @@ manager, CLI, dan aplikasi CRUD demo dengan offline-first.
 - `benchmarks/RESULTS.md` — hasil pengukuran nyata.
 
 **Test**
-- 250 test: 96 unit, 46 integrasi, 16 regresi, 13 offline, 8 konkurensi,
-  19 database, 35 keamanan, 17 tooling.
+- 257 test: 96 unit, 46 integrasi, 16 regresi, 13 offline, 8 konkurensi,
+  19 database, 35 keamanan, 24 tooling.
 - 0 test dilewati, 0 dinonaktifkan.
 
 ### Diperbaiki
 
 Semua perbaikan tercatat penuh di `docs/BUG_TRACKER.md` (BNG-001 s.d.
-BNG-038).
+BNG-039).
 
 Ringkasan per komponen:
 
@@ -101,7 +101,7 @@ Ringkasan per komponen:
 | --- | --- | --- |
 | Parser | BNG-001..009, 021 | Backtracking arrow, error lokasi, `void`, deklarasi ganda |
 | Codegen | BNG-010..015, 022 | `export` menimpa ekspor lain, `fn` keyword, `undefined`, reserved word, `typeof` |
-| Bundler | BNG-023 | Entry point tidak dipanggil saat build |
+| Bundler | BNG-023, 039 | Entry point tidak dipanggil saat build; bundel client gagal di browser karena memakai `require` |
 | Runtime HTTP | BNG-024, 025, 028 | Aset statis 404, kontrak error, beban 1000 request |
 | Runtime core | BNG-026 | `NotFoundError`/`ConflictError` membuang `details` |
 | Security | BNG-027 | `timingSafeEqual` hanya menerima Buffer |

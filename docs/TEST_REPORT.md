@@ -14,9 +14,9 @@ Laporan hasil pengujian. Semua angka berasal dari eksekusi nyata pada
 ```
 $ npm test
 
-ℹ tests 250
+ℹ tests 257
 ℹ suites 0
-ℹ pass 250
+ℹ pass 257
 ℹ fail 0
 ℹ cancelled 0
 ℹ skipped 0
@@ -24,7 +24,7 @@ $ npm test
 ℹ duration_ms 3354.1362
 ```
 
-**250 test, 250 lulus, 0 gagal, 0 dilewati, 0 dinonaktifkan.**
+**257 test, 257 lulus, 0 gagal, 0 dilewati, 0 dinonaktifkan.**
 
 ---
 
@@ -39,8 +39,8 @@ $ npm test
 | `tests/concurrency/` | 8 | 8 | 0 | 10/100/500/1000 request, p50/p95/p99 |
 | `tests/database/` | 19 | 19 | 0 | Pool, transaksi, query builder, JOIN, injection |
 | `tests/security/` | 35 | 35 | 0 | Hash, CSRF, XSS, path, rate limit, session |
-| `tests/tools/` | 17 | 17 | 0 | Akurasi auditor + scaffold CLI |
-| **Total** | **250** | **250** | **0** | |
+| `tests/tools/` | 24 | 24 | 0 | Akurasi auditor, scaffold CLI, bundel browser |
+| **Total** | **257** | **257** | **0** | |
 
 Perintah verifikasi per suite:
 
@@ -229,6 +229,40 @@ palsu pada kode referensi proyek sendiri sebelum diperbaiki.
 
 ---
 
+## 9.1 Pengujian Bundel Browser
+
+`tests/tools/bundler.test.js` — 7 test mengunci output frontend.
+
+| Kasus | Yang dibuktikan |
+| --- | --- |
+| Bundel client tanpa `require(` | Frontend tidak memanggil API Node yang tidak ada di browser |
+| Bundel client tanpa `process.exitCode` | Tidak ada global Node di jalur error |
+| Runtime client ter-inline | `IndexedDBStore`, `SyncQueue` ada di dalam satu file |
+| Modul Node bawaan ditolak | `node:fs` gagal **saat build**, bukan di console browser |
+| Runtime server ditolak | `bonang` (server) tidak bisa diimpor di frontend |
+| Paket eksternal ditolak | `lodash` ditolak dengan pesan jelas |
+| Bundel server tetap memakai `require` | Perbaikan target client tidak merusak target server |
+
+Suite ini dibuat karena bug BNG-039. Frontend sebelumnya gagal total
+di browser dengan `Uncaught ReferenceError: require is not defined`,
+tetapi seluruh test tetap hijau karena semua suite berjalan di Node,
+tempat `require` selalu tersedia.
+
+Verifikasi langsung di browser (Chrome, DevTools Protocol):
+
+```
+$ node dist/server.js
+$ chrome --remote-debugging-port=9222 http://127.0.0.1:3000/
+
+STATE: {"status":"Online","msg":"","products":4,
+        "html":"<div class=\"product-row\">...Madu Hutan Lombok..."}
+```
+
+Empat produk tampil, indikator status "Online", tanpa exception di
+console.
+
+---
+
 ## 10. Uji CLI
 
 Sebagian perintah CLI diuji manual dengan output nyata:
@@ -275,7 +309,7 @@ missing field-> 400 {"status":"error","msg":"Field 'message' wajib diisi",
 
 ## 11. Metodologi dan Batasan
 
-1. **Tidak ada test yang dinonaktifkan.** Semua 250 test aktif dan dijalankan.
+1. **Tidak ada test yang dinonaktifkan.** Semua 257 test aktif dan dijalankan.
 2. **Tidak ada mock untuk jalur produksi.** Test integrasi menjalankan server
    HTTP sungguhan dengan database SQLite sungguhan.
 3. **Test offline memakai `FakeIndexedDB`**, bukan IndexedDB browser —

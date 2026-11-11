@@ -18,8 +18,8 @@ Rilis **0.1.0** (2026-11-11). Lengkap dan terverifikasi.
 
 | Metrik | Nilai |
 | --- | --- |
-| Test | 250 lulus, 0 gagal, 0 dilewati |
-| Bug | 38 tercatat, 38 Fixed, 0 Open |
+| Test | 257 lulus, 0 gagal, 0 dilewati |
+| Bug | 39 tercatat, 39 Fixed, 0 Open |
 | Audit statis | 0 temuan pada kode referensi |
 | Dependensi eksternal | **0** |
 
@@ -51,6 +51,66 @@ batasan: [`docs/KNOWN_LIMITATIONS.md`](docs/KNOWN_LIMITATIONS.md).
 
 ---
 
+## Bahasa Dasarnya Apa?
+
+Bonang **bukan** PHP dan **bukan** JavaScript. Ini bahasa pemrograman
+tersendiri dengan sintaks, grammar, dan semantik sendiri — yang punya
+compiler sendiri, parser sendiri, dan runtime sendiri.
+
+Yang terjadi di balik layar:
+
+```
+Kode Bonang (.bng)
+      │
+      ▼
+Lexer → Parser (Pratt) → AST → Codegen ──► JavaScript (CommonJS) ──► V8
+```
+
+| Bagian | Bahasa | Penjelasan |
+| --- | --- | --- |
+| **Source** | **Bonang** | `.bng`. Sintaks sendiri: `fn` untuk fungsi, `let`/`const` untuk variabel, `class` dengan `interface`/`enum`, tipe opsional. Grammar formal ada di [`docs/GRAMMAR.md`](docs/GRAMMAR.md). |
+| **Backend (BE)** | Bonang → **JavaScript (Node.js)** | Server dikompilasi ke JavaScript CommonJS, lalu berjalan di Node.js. Semua API Node (`node:http`, `node:sqlite`, `node:crypto`) tersedia apa adanya. |
+| **Frontend (FE)** | Bonang → **JavaScript (browser)** | Client dikompilasi ke JavaScript browser-murni (IIFE). Tidak ada `require`, tidak ada modul Node — modul Node yang tidak boleh dipakai di browser **ditolak saat build**. |
+
+Jadi: **satu bahasa (Bonang) untuk BE dan FE**, yang dikompilasi ke
+JavaScript. JavaScript adalah *target*, bukan bahasa aslinya — sama
+seperti Java dikompilasi ke bytecode.
+
+Contoh perbandingan — Bonang vs JavaScript equivalent-nya:
+
+```bonang
+// Bonang
+export async fn main() {
+    const app = createServer({ port: 3000 });
+    app.router.get("/api/products/:id", async (ctx) => {
+        const id = Number.parseInt(ctx.params.id, 10);
+        return { id };
+    });
+    await app.listen(3000);
+}
+```
+
+```javascript
+// JavaScript yang dihasilkan compiler
+async function main() {
+    const app = createServer({ port: 3000 });
+    app.router.get("/api/products/:id", async (ctx) => {
+        const id = Number.parseInt(ctx.params.id, 10);
+        return { id };
+    });
+    await app.listen(3000);
+}
+module.exports.main = main;
+```
+
+Bedanya ada pada **APA** yang ditulis programmer, bukan **ke mana**
+dikompilasi. Bonang memberi tipe deklaratif, `class` dengan
+`interface`/`enum`, validasi input bawaan, error bertingkat
+(`ValidationError`, `NotFoundError`, `ConflictError`), dan API offline-first
+— semuanya yang harus ditulis manual di JavaScript mentah.
+
+---
+
 ## Persyaratan
 
 - **Node.js >= 22** (diuji pada v24.21.0). Memakai `node:sqlite` langsung.
@@ -61,16 +121,78 @@ batasan: [`docs/KNOWN_LIMITATIONS.md`](docs/KNOWN_LIMITATIONS.md).
 
 ## Instalasi
 
+### Opsi 1 — Pasang CLI secara global (disarankan)
+
 ```bash
-npm install -g .          # pasang CLI secara global
-bonang version            # bonang v0.1.0
+git clone https://github.com/<user>/bonang-lang.git
+cd bonang-lang
+npm install -g .
+
+bonang version
+# Bonang v0.1.0
+# Node v24.21.0 | win32 x64
 ```
 
-Atau tanpa instalasi:
+`npm install -g .` tidak mengunduh apa pun dari registry — proyek ini
+nol dependensi, jadi yang terpasang hanya symlink ke `cli/cli.js`.
+
+### Opsi 2 — Tanpa instalasi
 
 ```bash
+git clone https://github.com/<user>/bonang-lang.git
+cd bonang-lang
 node cli/cli.js <perintah>
 ```
+
+### Opsi 3 — Pakai dari proyek sendiri
+
+```bash
+npm install --save-dev bonang-lang
+npx bonang init my-app
+```
+
+### Membuat proyek baru
+
+```bash
+bonang init my-app
+cd my-app
+
+#isi file .bng di src/server/main.bng
+bonang dev        # dev server + hot reload
+bonang build      # bundle ke dist/
+bonang test       # jalankan test suite Bonang
+```
+
+Struktur proyek yang dihasilkan:
+
+```
+my-app/
+├── bonang.config.json
+├── src/
+│   ├── server/main.bng      # entry backend
+│   ├── client/main.bng      # entry frontend (opsional)
+│   └── shared/              # modul dipakai server + client
+├── public/                  # aset statis (HTML, CSS, service worker)
+├── tests/app.test.bng       # test ditulis dalam Bonang
+└── dist/                    # hasil build (dibuat otomatis)
+```
+
+### Deploy ke hosting
+
+Yang di-upload **hanya** `dist/` — bukan `src/`, bukan `compiler/`,
+bukan `cli/`. Folder `dist/` sudah mandiri: isinya JavaScript murni plus
+`node:*` built-in, tanpa `node_modules`.
+
+```bash
+bonang build
+# upload dist/ + file database ke hosting
+node dist/server.js
+```
+
+Butuh hosting yang mendukung **Node.js** (VPS, Railway, Render, Fly.io).
+Shared hosting PHP biasa tidak bisa menjalankan Bonang.
+
+---
 
 ---
 
@@ -129,6 +251,8 @@ tidak bisa diparameterkan divalidasi terhadap allowlist identifier.
 
 ## Aplikasi Demo
 
+![Tampilan Bonang CRUD Demo](docs/images/bonang-crud-demo.png)
+
 `apps/bonang-crud-demo` — aplikasi CRUD penuh yang ditulis dalam Bonang:
 model `Product`, `ProductRepository`, `ProductService`,
 `ProductController`, SQLite `bonang_demo`, migrasi, frontend, service
@@ -171,7 +295,7 @@ examples/
 tests/         unit, integration, regression, offline, concurrency,
                database, security, tools
 benchmarks/    benchmark.js, RESULTS.md
-docs/          17 dokumen desain dan status
+docs/          19 dokumen desain dan status
 ```
 
 ---
@@ -179,12 +303,51 @@ docs/          17 dokumen desain dan status
 ## Menjalankan Test
 
 ```bash
-npm test               # 250 test, semua suite
+npm test               # 257 test, semua suite
 node --test "tests/unit/*.test.js"
 node --test "tests/security/*.test.js"
+node --test "tests/tools/bundler.test.js"
 ```
 
 Tidak ada test yang dinonaktifkan, dilewati, atau di-`todo`.
+
+CI berjalan otomatis di GitHub Actions untuk Node 22 dan 24 — setiap PR
+harus melewati seluruh suite, lint, audit, dan build demo sebelum bisa
+di-merge.
+
+---
+
+## Berkontribusi
+
+Kontribusi diterima — dari memperbaiki typo sampai menambah fitur baru di
+compiler. Detail lengkap ada di
+[`CONTRIBUTING.md`](CONTRIBUTING.md).
+
+Ringkasnya:
+
+```bash
+git clone https://github.com/<user>/bonang-lang.git
+cd bonang-lang
+npm test                      # pastikan baseline hijau
+
+git checkout -b feat/nama-fitur
+# ... tulis kode + test ...
+
+npm test && node cli/cli.js lint && node cli/cli.js audit
+git commit -m "feat(scope): deskripsi singkat"
+git push && buka Pull Request
+```
+
+Empat aturan yang tidak bisa dilanggar:
+
+1. Tidak boleh ada implementasi palsu (stub, mock, nilai hardcoded).
+2. Tidak boleh ada test yang dinonaktifkan, dilewati, atau di-`todo`.
+3. Tidak boleh ada klaim fitur selesai sebelum diuji.
+4. Tidak boleh ada exception yang disembunyikan.
+
+Tiap bug yang diperbaiki harus punya regression test, dan tiap bug baru
+dicatat di [`docs/BUG_TRACKER.md`](docs/BUG_TRACKER.md) dengan tanggal,
+komponen, severity, root cause, fix, dan regression test.
 
 ---
 
@@ -229,7 +392,7 @@ Metodologi lengkap: [`benchmarks/RESULTS.md`](benchmarks/RESULTS.md).
 | [PRD.md](docs/PRD.md) | Requirements |
 | [TECHNICAL_DECISIONS.md](docs/TECHNICAL_DECISIONS.md) | Keputusan dan alasannya |
 | [RISK_REGISTER.md](docs/RISK_REGISTER.md) | Risiko dan mitigasi |
-| [BUG_TRACKER.md](docs/BUG_TRACKER.md) | 38 bug dan perbaikannya |
+| [BUG_TRACKER.md](docs/BUG_TRACKER.md) | 39 bug dan perbaikannya |
 | [AUDIT_REPORT.md](docs/AUDIT_REPORT.md) | Hasil audit |
 | [KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md) | 31 batasan terverifikasi |
 | [PROJECT_PROGRESS.md](docs/PROJECT_PROGRESS.md) | Status per fase |
@@ -241,4 +404,4 @@ Metodologi lengkap: [`benchmarks/RESULTS.md`](benchmarks/RESULTS.md).
 
 ## Lisensi
 
-MIT.
+MIT — lihat [`LICENSE`](LICENSE).

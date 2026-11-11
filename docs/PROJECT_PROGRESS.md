@@ -7,8 +7,8 @@ Status yang dipakai: `Pending`, `In Progress`, `Blocked`, `Testing`,
 `Failed`, `Completed`.
 
 **Status terakhir**: 2026-11-11
-**Test**: 250 lulus / 0 gagal / 0 dilewati
-**Bug**: 38 tercatat / 38 Fixed / 0 Open
+**Test**: 257 lulus / 0 gagal / 0 dilewati
+**Bug**: 39 tercatat / 38 Fixed / 0 Open
 **Audit statis**: 0 temuan pada kode referensi
 
 ---
@@ -29,8 +29,8 @@ Status yang dipakai: `Pending`, `In Progress`, `Blocked`, `Testing`,
 | 9 | Offline first | Completed | 100% | 13 offline test pass | IndexedDB store, sync queue, LWW + optimistic concurrency (baseVersion/409). |
 | 10 | CRUD application | Completed | 100% | 46 integration test pass | Bonang CRUD Demo: Product/ProductRepository/ProductService/ProductController, DB `bonang_demo`. |
 | 11 | Benchmark | Completed | 100% | `node cli/cli.js bench` | 5 skenario terukur, hasil di `benchmarks/RESULTS.md`. |
-| 12 | Tooling (CLI) | Completed | 100% | 17 tooling test pass | init/run/build/dev/test/lint/audit/bench/migrate/version semua berfungsi. |
-| 13 | Final audit | Completed | 100% | 250 test + audit statis | `docs/AUDIT_REPORT.md` — 0 temuan terbuka. |
+| 12 | Tooling (CLI) | Completed | 100% | 24 tooling test pass | init/run/build/dev/test/lint/audit/bench/migrate/version semua berfungsi. |
+| 13 | Final audit | Completed | 100% | 257 test + audit statis | `docs/AUDIT_REPORT.md` — 0 temuan terbuka. |
 | 14 | Documentation | Completed | 100% | - | 17 dokumen di `docs/` + `benchmarks/RESULTS.md` + `README.md`. |
 
 ---
@@ -76,8 +76,8 @@ Status yang dipakai: `Pending`, `In Progress`, `Blocked`, `Testing`,
 
 ```
 $ npm test
-ℹ tests 250
-ℹ pass 250
+ℹ tests 257
+ℹ pass 257
 ℹ fail 0
 ℹ skipped 0
 ℹ todo 0
@@ -115,7 +115,7 @@ uji non-blocking selalu lulus.
 
 ## 3. Bug yang Ditemukan dan Diperbaiki
 
-38 bug tercatat di `docs/BUG_TRACKER.md`, seluruhnya Fixed.
+39 bug tercatat di `docs/BUG_TRACKER.md`, seluruhnya Fixed.
 
 | ID | Komponen | Severity | Ringkasan |
 | --- | --- | --- | --- |
@@ -168,7 +168,7 @@ uji non-blocking selalu lulus.
 | `docs/SECURITY_DESIGN.md` | Model keamanan + audit statis |
 | `docs/DATABASE_DESIGN.md` | Skema, pool, query builder |
 | `docs/OFFLINE_FIRST_DESIGN.md` | IndexedDB, sync queue, konflik |
-| `docs/BUG_TRACKER.md` | 38 bug, siklus perbaikan |
+| `docs/BUG_TRACKER.md` | 39 bug, siklus perbaikan |
 | `docs/AUDIT_REPORT.md` | Hasil audit keamanan |
 | `docs/PROJECT_PROGRESS.md` | Dokumen ini |
 | `docs/TEST_REPORT.md` | Hasil pengujian |
@@ -219,9 +219,9 @@ Untuk melanjutkan pekerjaan tanpa kehilangan riwayat:
 
 1. Baca dokumen ini untuk status.
 2. Baca `docs/BUG_TRACKER.md` untuk bug yang sudah pernah ditemukan dan
-   dikunci test-nya (38 bug, semua Fixed).
+   dikunci test-nya (39 bug, semua Fixed).
 3. Baca `docs/KNOWN_LIMITATIONS.md` untuk hal yang diketahui belum selesai.
-4. Jalankan `npm test` untuk memastikan keadaan sehat (250 lulus).
+4. Jalankan `npm test` untuk memastikan keadaan sehat (257 lulus).
 5. Jalankan `node cli/cli.js audit` untuk memastikan audit statis bersih
    (0 temuan).
 6. Ikuti siklus di `docs/BUG_TRACKER.md`: reproduksi -> root cause ->

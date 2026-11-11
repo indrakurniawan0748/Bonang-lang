@@ -24,7 +24,7 @@ eksekusi test suite penuh.
 | Path traversal | 0 | - | Hijau |
 | Autentikasi di route sensitif | 0 pada demo | - | Hijau |
 | Dependensi eksternal | 0 | - | Hijau |
-| Test suite | 250 lulus / 0 gagal | - | Hijau |
+| Test suite | 257 lulus / 0 gagal | - | Hijau |
 | Linter | 28 info/warning, 0 error | - | Hijau |
 
 **Tidak ada temuan terbuka.** Delapan temuan yang ditemukan selama audit
@@ -238,8 +238,8 @@ disengaja dan tidak menunjukkan cacat.
 
 ```
 $ npm test
-ℹ tests 250
-ℹ pass 250
+ℹ tests 257
+ℹ pass 257
 ℹ fail 0
 ℹ skipped 0
 ℹ todo 0
@@ -255,7 +255,7 @@ $ npm test
 | `tests/concurrency/` | 8 | 10/100/500/1000 request, p50/p95/p99 |
 | `tests/database/` | 19 | Pool, transaksi, query builder, JOIN, injection |
 | `tests/security/` | 35 | Hash, CSRF, XSS, path, rate limit, session |
-| `tests/tools/` | 17 | Akurasi auditor + scaffold CLI |
+| `tests/tools/` | 24 | Akurasi auditor, scaffold CLI, bundel browser |
 
 Tidak ada test yang dinonaktifkan, dilewati, atau di-`todo`.
 

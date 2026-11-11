@@ -77,7 +77,7 @@ LWW dengan optimistic concurrency (`baseVersion`, 409 `CONFLICT`).
 
 | Metrik | Nilai |
 | --- | --- |
-| Test | 250 lulus, 0 gagal, 0 dilewati |
+| Test | 257 lulus, 0 gagal, 0 dilewati |
 | Kompilasi | 4 932 batch/detik |
 | Eksekusi | 1 919 386 operasi/detik |
 | Baseline Node | 2 710 027 operasi/detik |
@@ -98,7 +98,7 @@ Rincian dan metodologi: `benchmarks/RESULTS.md`.
 
 ## Yang Diperbaiki
 
-38 bug tercatat di `docs/BUG_TRACKER.md`, seluruhnya sudah Fixed.
+39 bug tercatat di `docs/BUG_TRACKER.md`, seluruhnya sudah Fixed.
 Lima di antaranya menyangkut keakuratan alat audit itu sendiri
 (BNG-031 s.d. BNG-035) — sebelum diperbaiki, `bonang audit` melaporkan 19
 temuan palsu pada kode referensi proyek sendiri, sehingga tidak dapat

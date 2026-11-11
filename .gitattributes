@@ -1,0 +1,17 @@
+# Normalisasi line ending agar diff di GitHub tidak seluruhnya berubah
+# hanya karena perbedaan CRLF/LF di mesin kontributor.
+* text=auto eol=lf
+
+# Berkas yang secara khusus butuh CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Aset biner
+*.png binary
+*.jpg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.db binary
+*.sqlite binary

@@ -15,11 +15,42 @@ const { Compiler } = require('./compiler');
  * dievaluasi sekali (module cache sederhana). Modul Node bawaan dan
  * runtime Bonang tetap dibiarkan sebagai `require` — runtime Bonang
  * ikut disalin ke dalam output agar bundel mandiri.
+ *
+ * Dua target, dengan aturan berbeda:
+ *
+ *  - `server` — dijalankan di Node. `require` apa adanya, modul Node
+ *    bawaan boleh dipakai.
+ *  - `client` — dijalankan di browser. `require` **tidak boleh**
+ *    dipakai karena tidak ada di browser; modul runtime client
+ *    di-inline-kan ke dalam bundel, dan modul Node bawaan ditolak
+ *    saat bundling (bukan diam-diam gagal saat runtime).
  */
 
 const RUNTIME_MODULE_ID = 'bonang';
 const CLIENT_MODULE_ID = 'bonang/client';
 const STD_MODULE_ID = 'bonang/std';
+
+/**
+ * Modul Node bawaan yang tidak boleh muncul di bundel browser.
+ *
+ * Daftar ini dipakai untuk menolak bundling client yang menarik
+ * dependensi server-only. Menolak saat build jauh lebih baik daripada
+ * melempar `require is not defined` di console browser.
+ */
+const NODE_BUILTIN_PATTERN = /^node:/;
+
+/**
+ * Nama global yang dipakai modul runtime client ketika di-inline-kan
+ * ke dalam bundel browser.
+ */
+const CLIENT_RUNTIME_GLOBAL = '__bonangClient';
+
+/**
+ * Id modul internal untuk runtime client yang di-inline-kan ke bundel
+ * browser. Berbeda dari id modul Bonang (`__bng_0`, `__bng_1`, ...) yang
+ * diberi nomor urut.
+ */
+const CLIENT_RUNTIME_MODULE_ID = '__bng_client_runtime';
 
 /**
  * Muat graf modul dari entry point.
@@ -102,6 +133,8 @@ function resolveRelative(fromFile, spec) {
  */
 function bundle(options = {}) {
     const entryPath = path.resolve(options.entry);
+    const target = options.target || 'server';
+    const isClient = target === 'client';
     const compiler = new Compiler();
     const modules = collectModules(entryPath, compiler);
 
@@ -114,11 +147,28 @@ function bundle(options = {}) {
 
     const parts = [];
     parts.push('"use strict";');
-    parts.push(`// Bonang bundle — ${options.target || 'server'}`);
+    parts.push(`// Bonang bundle — ${target}`);
     parts.push('(function () {');
     parts.push('var __bngModules = {};');
     parts.push('var __bngCache = {};');
-    parts.push(`
+
+    if (isClient) {
+        // Loader browser: tidak ada `require` sama sekali. Modul runtime
+        // client di-inline sebagai modul internal supaya frontend tidak
+        // butuh file tambahan maupun loader eksternal.
+        parts.push(`
+function __bngRequire(id) {
+    if (__bngCache[id]) return __bngCache[id].exports;
+    var factory = __bngModules[id];
+    if (!factory) throw new Error("Modul Bonang tidak ditemukan: " + id);
+    var module = { exports: {} };
+    __bngCache[id] = module;
+    factory(module, module.exports);
+    return module.exports;
+}
+`);
+    } else {
+        parts.push(`
 function __bngRequire(id) {
     if (__bngCache[id]) return __bngCache[id].exports;
     var factory = __bngModules[id];
@@ -132,6 +182,7 @@ function __bngRequire(id) {
     return module.exports;
 }
 `);
+    }
 
     for (const [filePath, info] of modules) {
         const id = ids.get(filePath);
@@ -144,13 +195,28 @@ function __bngRequire(id) {
         }
 
         // Tulis ulang specifier import menjadi id modul internal.
-        code = rewriteRequires(code, info.deps, ids);
+        code = rewriteRequires(code, info.deps, ids, isClient);
 
-        // Parameter `require` sengaja dibiarkan bernama `require` agar
-        // modul yang membutuhkan modul Node bawaan tetap bekerja; modul
-        // Bonang relatif diarahkan ke `__bngRequire`.
-        parts.push(`__bngModules[${JSON.stringify(id)}] = function (module, exports, require) {`);
+        if (isClient) {
+            // Parameter `require` sengaja TIDAK diberikan di bundel
+            // browser. Kalau ada modul yang masih memakainya, errornya
+            // harus muncul saat build, bukan diam-diam saat runtime.
+            parts.push(`__bngModules[${JSON.stringify(id)}] = function (module, exports) {`);
+        } else {
+            // Parameter `require` sengaja dibiarkan bernama `require` agar
+            // modul yang membutuhkan modul Node bawaan tetap bekerja; modul
+            // Bonang relatif diarahkan ke `__bngRequire`.
+            parts.push(`__bngModules[${JSON.stringify(id)}] = function (module, exports, require) {`);
+        }
         parts.push(code);
+        parts.push('};');
+    }
+
+    // Modul runtime client di-inline-kan ke dalam bundel browser supaya
+    // frontend cukup satu file: `client.js`.
+    if (isClient) {
+        parts.push(`__bngModules["${CLIENT_RUNTIME_MODULE_ID}"] = function (module, exports) {`);
+        parts.push(readClientRuntimeSource());
         parts.push('};');
     }
 
@@ -165,7 +231,7 @@ if (__bngEntry && typeof __bngEntry.main === "function") {
     if (__bngResult && typeof __bngResult.catch === "function") {
         __bngResult.catch(function (err) {
             console.error(err && err.stack ? err.stack : err);
-            process.exitCode = 1;
+            ${isClient ? '' : 'process.exitCode = 1;'}
         });
     }
 }
@@ -193,13 +259,52 @@ if (__bngEntry && typeof __bngEntry.main === "function") {
  * Modul Bonang relatif diarahkan ke `__bngRequire` (loader internal bundel),
  * sedangkan modul Node bawaan dan runtime Bonang dibiarkan sebagai
  * `require` Node biasa.
+ *
+ * Untuk target `client`, `require` tidak boleh muncul sama sekali —
+ * browser tidak memilikinya. Karena itu modul runtime client diarahkan
+ * ke modul internal yang di-inline-kan, dan modul Node bawaan
+ * **ditolak** dengan pesan yang jelas.
  */
-function rewriteRequires(code, deps, ids) {
+function rewriteRequires(code, deps, ids, isClient = false) {
     return code.replace(/require\((['"])([^'"]+)\1\)/g, (match, quote, spec) => {
         const target = deps.get(spec);
-        if (!target) return match;
+        if (!target) {
+            if (isClient) {
+                throw new Error(
+                    `Modul '${spec}' tidak bisa dipakai di bundel browser. ` +
+                    `Frontend tidak punya akses modul Node.`
+                );
+            }
+            return match;
+        }
 
         if (isBareSpecifier(spec)) {
+            if (isClient) {
+                // Runtime client di-inline-kan ke bundel, bukan file terpisah.
+                if (spec === CLIENT_MODULE_ID) {
+                    return `__bngRequire(${JSON.stringify(CLIENT_RUNTIME_MODULE_ID)})`;
+                }
+                if (NODE_BUILTIN_PATTERN.test(spec)) {
+                    throw new Error(
+                        `Modul Node '${spec}' tidak boleh dipakai di bundel browser. ` +
+                        `Pindahkan logika ini ke sisi server.`
+                    );
+                }
+                // Modul runtime server dan standard library tidak tersedia
+                // di browser; tolak dengan jelas daripada gagal saat runtime.
+                if (spec === RUNTIME_MODULE_ID || spec === STD_MODULE_ID) {
+                    throw new Error(
+                        `Modul '${spec}' hanya tersedia di server. ` +
+                        `Frontend tidak boleh mengimpornya.`
+                    );
+                }
+                throw new Error(
+                    `Paket '${spec}' tidak bisa dipakai di bundel browser. ` +
+                    `Bundel frontend hanya boleh memakai modul Bonang relatif ` +
+                    `dan modul 'bonang/client'.`
+                );
+            }
+
             // Modul runtime Bonang dipetakan ke bundel runtime terpisah
             // yang disalin ke folder output.
             if (spec === RUNTIME_MODULE_ID) return 'require("./bonang-runtime.js")';
@@ -212,6 +317,23 @@ function rewriteRequires(code, deps, ids) {
         const id = ids.get(target);
         return id ? `__bngRequire(${JSON.stringify(id)})` : match;
     });
+}
+
+/**
+ * Baca sumber runtime client untuk di-inline-kan ke bundel browser.
+ *
+ * Runtime client ditulis sebagai UMD: `module.exports = factory()` bila
+ * ada `module`, selain itu pasang ke global. Karena bundel browser
+ * membungkus kode sebagai `function (module, exports) { ... }`, cabang
+ * CommonJS-nya yang dipakai — jadi `module.exports` terisi dengan objek
+ * runtime tanpa perlu perubahan apa pun pada berkasnya.
+ */
+function readClientRuntimeSource() {
+    const clientPath = path.resolve(__dirname, '../runtime/client/client.js');
+    if (!fs.existsSync(clientPath)) {
+        throw new Error(`Runtime client tidak ditemukan: ${clientPath}`);
+    }
+    return fs.readFileSync(clientPath, 'utf8');
 }
 
 /**
@@ -282,4 +404,12 @@ function copyDirectory(src, dest) {
     }
 }
 
-module.exports = { bundle, collectModules, resolveRelative, copyRuntime, rewriteRequires };
+module.exports = {
+    bundle,
+    collectModules,
+    resolveRelative,
+    copyRuntime,
+    rewriteRequires,
+    readClientRuntimeSource,
+    CLIENT_RUNTIME_MODULE_ID
+};

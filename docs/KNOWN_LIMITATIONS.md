@@ -85,5 +85,5 @@ bukti — semuanya berasal dari hasil pengujian atau dari pembacaan kode.
 | 11 test auditor | `node --test "tests/tools/auditor.test.js"` |
 | 6 test CLI | `node --test "tests/tools/cli.test.js"` |
 | 16 test regresi | `node --test "tests/regression/*.test.js"` |
-| 250 test total | `npm test` |
+| 257 test total | `npm test` |
 | 0 temuan audit pada kode referensi | `node cli/cli.js audit` |

@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  verify:
+    name: Verifikasi (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [ '22', '24' ]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      # Proyek ini sengaja tanpa dependensi eksternal, jadi tidak ada
+      # langkah `npm install`. Node built-in saja yang dipakai.
+      - name: Periksa jumlah dependensi
+        run: |
+          node -e "
+            const pkg = require('./package.json');
+            const deps = Object.keys(pkg.dependencies || {}).length;
+            const dev = Object.keys(pkg.devDependencies || {}).length;
+            if (deps + dev > 0) {
+              console.error('Proyek harus tetap tanpa dependensi eksternal.');
+              process.exit(1);
+            }
+            console.log('Dependensi eksternal: ' + (deps + dev));
+          "
+
+      - name: Unit test
+        run: node --test "tests/unit/*.test.js"
+
+      - name: Integration test
+        run: node --test "tests/integration/*.test.js"
+
+      - name: Regression test
+        run: node --test "tests/regression/*.test.js"
+
+      - name: Offline test
+        run: node --test "tests/offline/*.test.js"
+
+      - name: Concurrency test
+        run: node --test "tests/concurrency/*.test.js"
+
+      - name: Database test
+        run: node --test "tests/database/*.test.js"
+
+      - name: Security test
+        run: node --test "tests/security/*.test.js"
+
+      - name: Tooling test
+        run: node --test "tests/tools/*.test.js"
+
+      - name: Seluruh test suite
+        run: npm test
+
+      - name: Lint
+        run: node cli/cli.js lint
+
+      - name: Audit keamanan
+        run: node cli/cli.js audit
+
+      - name: Build aplikasi demo
+        run: |
+          cd apps/bonang-crud-demo
+          node ../../cli/cli.js migrate
+          node ../../cli/cli.js build
+          test -f dist/server.js
+          test -f dist/client.js
+
+      - name: Bersihkan artefak build
+        if: always()
+        run: |
+          rm -rf apps/bonang-crud-demo/dist
+          rm -rf apps/bonang-crud-demo/data
