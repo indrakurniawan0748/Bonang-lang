@@ -182,3 +182,69 @@ test('auditor: secret hardcoded tetap dilaporkan', async () => {
 
     assert.ok(rules(issues).includes('no-hardcoded-secret'));
 });
+
+// ===== KASUS: SQL MENTAH PADA QUERY BUILDER =====
+
+test('auditor: whereRaw dengan data user dilaporkan', async () => {
+    const issues = await auditSource([
+        'export class ProductRepository {',
+        '  async search(ctx) {',
+        '    const name = ctx.body.name;',
+        '    return QueryBuilder.from(this.pool, "products").whereRaw(`name = ${name}`);',
+        '  }',
+        '}'
+    ].join('\n'));
+
+    const found = issues.filter((i) => i.rule === 'sql-injection-raw');
+    assert.strictEqual(found.length, 1, 'SQL mentah dengan data user harus dilaporkan');
+    assert.strictEqual(found[0].severity, 'critical');
+});
+
+test('auditor: having dengan data user dilaporkan', async () => {
+    const issues = await auditSource([
+        'export class ProductRepository {',
+        '  async search(ctx) {',
+        '    const min = ctx.query.min;',
+        '    return QueryBuilder.from(this.pool, "products").having(`total > ${min}`);',
+        '  }',
+        '}'
+    ].join('\n'));
+
+    const found = issues.filter((i) => i.rule === 'sql-injection-raw');
+    assert.strictEqual(found.length, 1);
+});
+
+test('auditor: whereRaw dengan placeholder dan konstanta aman', async () => {
+    const issues = await auditSource([
+        'const SORT_COLUMN = "created_at";',
+        'export class ProductRepository {',
+        '  async search(name) {',
+        '    return QueryBuilder.from(this.pool, "products").whereRaw(`name = ?`, [name]);',
+        '  }',
+        '}'
+    ].join('\n'));
+
+    assert.deepStrictEqual(rules(issues), [],
+        'SQL mentah dengan placeholder harus aman');
+});
+
+test('auditor: whereRaw dengan operator + dan data user dilaporkan', async () => {
+    const issues = await auditSource([
+        'export class ProductRepository {',
+        '  async search(ctx) {',
+        '    const name = ctx.body.name;',
+        '    return QueryBuilder.from(this.pool, "products").whereRaw("name = " + name);',
+        '  }',
+        '}'
+    ].join('\n'));
+
+    assert.ok(rules(issues).includes('sql-injection-raw'));
+});
+
+test('auditor: whereRaw tanpa SQL tidak dilaporkan', async () => {
+    const issues = await auditSource([
+        'const q = QueryBuilder.from(pool, "products").whereRaw("id = ?", [id]);'
+    ].join('\n'));
+
+    assert.deepStrictEqual(rules(issues), []);
+});

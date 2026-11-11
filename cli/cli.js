@@ -266,6 +266,15 @@ command('build', 'Build proyek untuk produksi', async (args) => {
         console.log('  ✓ public/ → dist/public');
     }
 
+    // Tulis manifest precache — dipakai service worker untuk invalidasi
+    // cache per-file (bukan per-versi-cache). Tanpa manifest ini, service
+    // worker harus menaikkan nama cache setiap deploy, yang memaksa
+    // unduhan ulang seluruh aset.
+    const precache = writePrecacheManifest(outDir, root);
+    if (precache) {
+        console.log(`  ✓ precache-manifest.json (${precache.count} file)`);
+    }
+
     // Tulis manifest build.
     fs.writeFileSync(path.join(outDir, 'build.json'), JSON.stringify({
         name: config.name,
@@ -415,6 +424,14 @@ command('audit', 'Audit keamanan proyek', async (args) => {
     const found = findConfig();
     const root = found ? path.dirname(found.path) : process.cwd();
 
+    // `--structure` menambah audit struktur (siklus, dead code, duplikasi),
+    // bukan hanya audit keamanan.
+    if (args.options.structure) {
+        const { auditStructure, printStructureReport } = require('./structure-audit');
+        const structural = auditStructure();
+        printStructureReport(structural);
+    }
+
     const { SecurityAuditor } = require('./auditor');
     const auditor = new SecurityAuditor();
     const report = await auditor.audit(root);
@@ -520,6 +537,71 @@ function copyDir(src, dest) {
         if (entry.isDirectory()) copyDir(from, to);
         else fs.copyFileSync(from, to);
     }
+}
+
+/**
+ * Tulis `precache-manifest.json` ke folder build.
+ *
+ * Manifest memuat hash SHA-256 (dipotong 16 hex) untuk setiap aset yang
+ * layak di-cache. Service worker membandingkan hash ini dengan hash yang
+ * tersimpan pada entri cache: file yang berubah dihapus dari cache,
+ * file yang tidak berubah tetap dipakai. Inilah invalidasi cache per-file.
+ *
+ * Kunci manifest adalah **URL** aset, bukan path di filesystem. Aset
+ * di `public/` disajikan pada URL yang sama dengan nama relatifnya
+ * (`/index.html`), sedangkan bundel client disajikan dari root build
+ * (`/client.js`).
+ *
+ * @returns {{count: number, version: string}|null} null bila tidak ada aset.
+ */
+function writePrecacheManifest(outDir, root) {
+    const crypto = require('node:crypto');
+    const publicDir = path.resolve(root, 'public');
+    const files = {};
+
+    const addFile = (fullPath, urlPath) => {
+        if (!fs.existsSync(fullPath)) return;
+        if (!fs.statSync(fullPath).isFile()) return;
+        const hash = crypto.createHash('sha256').update(fs.readFileSync(fullPath)).digest('hex');
+        files[urlPath] = hash.slice(0, 16);
+    };
+
+    // Aset statis: `public/x/y.css` → URL `/x/y.css`.
+    const distPublic = path.join(outDir, 'public');
+    if (fs.existsSync(distPublic)) {
+        const walk = (dir) => {
+            for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+                const from = path.join(dir, entry.name);
+                if (entry.isDirectory()) {
+                    walk(from);
+                    continue;
+                }
+                const relative = path.relative(distPublic, from).split(path.sep).join('/');
+                addFile(from, '/' + relative);
+            }
+        };
+        walk(distPublic);
+    }
+
+    // Bundel client disajikan dari root build.
+    addFile(path.join(outDir, 'client.js'), '/client.js');
+
+    if (Object.keys(files).length === 0) return null;
+
+    // Versi build = hash gabungan semua hash file. Berubah hanya bila
+    // ada aset yang berubah.
+    const version = crypto.createHash('sha256')
+        .update(Object.keys(files).sort().map((k) => k + ':' + files[k]).join('|'))
+        .digest('hex')
+        .slice(0, 16);
+
+    fs.writeFileSync(
+        path.join(outDir, 'precache-manifest.json'),
+        JSON.stringify({ version, files }, null, 2),
+        'utf8'
+    );
+
+    return { count: Object.keys(files).length, version };
 }
 
 // ===== TEMPLATE =====

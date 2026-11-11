@@ -16,6 +16,7 @@ const { Server, Request, Response } = require('./http/server');
 const { Router, matchPath } = require('./http/router');
 const { SQLitePool } = require('./database/pool');
 const { QueryBuilder, assertIdentifier } = require('./database/query-builder');
+const { SoftDeleteRepository, addSoftDeleteColumn } = require('./database/soft-delete');
 const security = require('./security/security');
 const filesystem = require('./filesystem/files');
 const { createHttpClient } = require('./network/http-client');
@@ -38,8 +39,11 @@ module.exports = {
     // Database
     SQLitePool,
     QueryBuilder,
+    SoftDeleteRepository,
+    addSoftDeleteColumn,
     db: {
-        from: (pool, table) => QueryBuilder.from(pool, table)
+        from: (pool, table) => QueryBuilder.from(pool, table),
+        softDelete: (pool, table, options) => new SoftDeleteRepository(pool, table, options)
     },
 
     // Security

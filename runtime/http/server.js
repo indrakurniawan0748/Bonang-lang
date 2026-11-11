@@ -2,11 +2,81 @@
 
 const http = require('node:http');
 const fs = require('node:fs');
+const path = require('node:path');
 const { URL } = require('node:url');
 const { Router } = require('./router');
 const { BonangError, ValidationError, getLogger } = require('../core/runtime');
+const { signValue } = require('../security/security');
 
 const MAX_BODY_BYTES = 5 * 1024 * 1024; // 5 MB
+
+/**
+ * Header keamanan bawaan.
+ *
+ * Diterapkan otomatis ke setiap respons (JSON, teks, redirect, aset
+ * statis, dan respons error) karena ditetapkan di lapisan Response —
+ * bukan di handler — sehingga tidak ada jalur keluar yang bisa
+ * melewatkannya.
+ *
+ * Nilai bisa dilonggarkan per-aplikasi lewat opsi `securityHeaders`
+ * pada `createServer`, dan bisa ditimpa per-route lewat
+ * `response.set(...)`.
+ */
+const DEFAULT_SECURITY_HEADERS = {
+    // Cegah browser menebak-nebak tipe konten (mitigasi content sniffing).
+    'x-content-type-options': 'nosniff',
+    // Cegah halaman di-embed lewat iframe (mitigasi clickjacking).
+    'x-frame-options': 'SAMEORIGIN',
+    // Jangan kirim URL lengkap ke origin lain.
+    'referrer-policy': 'strict-origin-when-cross-origin',
+    // Batasi sumber daya yang boleh dimuat halaman. Default 'self' berarti
+    // hanya aset dari origin sendiri yang boleh dimuat — termasuk skrip,
+    // gaya, dan koneksi API.
+    'content-security-policy': [
+        "default-src 'self'",
+        "script-src 'self'",
+        "style-src 'self'",
+        "img-src 'self' data:",
+        "font-src 'self'",
+        "connect-src 'self'",
+        "object-src 'none'",
+        "base-uri 'self'",
+        "form-action 'self'",
+        "frame-ancestors 'self'"
+    ].join('; '),
+    // Matikan fitur browser sensitif yang tidak dipakai aplikasi Bonang.
+    'permissions-policy': 'geolocation=(), camera=(), microphone=(), payment=()',
+    // Nonaktifkan filter XSS lawas browser yang bisa membocorkan URL.
+    'x-xss-protection': '0'
+};
+
+/**
+ * Susun konfigurasi header keamanan dari opsi server.
+ *
+ * - `undefined` → pakai bawaan.
+ * - `false`      → nonaktifkan sepenuhnya (hanya untuk kasus yang
+ *                  memang butuh, mis. server yang hanya jadi proxy).
+ * - objek       → gabung dengan bawaan; nilai aplikasi menang.
+ *
+ * Kunci dinormalkan ke huruf kecil supaya konsisten dengan
+ * `Response.set()` yang juga menyimpan kunci huruf kecil.
+ */
+function resolveSecurityHeaders(option) {
+    if (option === false) return null;
+    if (option === undefined || option === null) return { ...DEFAULT_SECURITY_HEADERS };
+    if (typeof option !== 'object') {
+        throw new TypeError('Opsi securityHeaders harus object atau false');
+    }
+    const merged = { ...DEFAULT_SECURITY_HEADERS };
+    for (const [name, value] of Object.entries(option)) {
+        if (value === null || value === false) {
+            delete merged[name.toLowerCase()];
+            continue;
+        }
+        merged[name.toLowerCase()] = String(value);
+    }
+    return merged;
+}
 
 /**
  * Objek Request Bonang.
@@ -48,6 +118,23 @@ class Request {
     json(fallback = null) {
         if (this.body === null || typeof this.body !== 'object') return fallback;
         return this.body;
+    }
+
+    /**
+     * Ambil nilai cookie bertanda tangan.
+     *
+     * Mengembalikan nilai asli bila signature cocok, atau `fallback` (null
+     * secara bawaan) bila cookie tidak ada, rusak, atau signature tidak
+     * cocok. Cookie yang gagal verifikasi diperlakukan sama dengan cookie
+     * yang tidak ada — caller tidak boleh bisa membedakan keduanya lewat
+     * nilai balik.
+     */
+    signedCookie(name, secret, fallback = null) {
+        const { verifySignedValue } = require('../security/security');
+        const raw = this.cookies ? this.cookies[name] : undefined;
+        if (raw === undefined) return fallback;
+        const value = verifySignedValue(raw, secret);
+        return value === null ? fallback : value;
     }
 
     /** Ambil satu field dari body. */
@@ -114,12 +201,13 @@ class Request {
  * dikirim tidak dapat diubah lagi — pemanggil bertanggung jawab.
  */
 class Response {
-    constructor(raw) {
+    constructor(raw, securityHeaders = DEFAULT_SECURITY_HEADERS) {
         this.raw = raw;
         this.statusCode = 200;
         this.headers = {};
         this.finished = false;
         this.cookies = [];
+        this.securityHeaders = securityHeaders;
     }
 
     status(code) {
@@ -136,10 +224,38 @@ class Response {
         return this.set('Content-Type', contentType);
     }
 
-    /** Set cookie. Opsi mengikuti atribut cookie HTTP. */
+    /**
+     * Set cookie. Opsi mengikuti atribut cookie HTTP.
+     *
+     * Bila `options.signed` true, nilai dilindungi HMAC dengan
+     * `options.secret` sebelum dikirim.
+     */
     cookie(name, value, options = {}) {
+        if (options.signed) {
+            if (!options.secret) {
+                throw new ValidationError('Secret wajib diisi untuk signed cookie');
+            }
+            const { secret, signed, ...rest } = options;
+            this.cookies.push({ name, value: signValue(value, secret), ...rest, signed: true });
+            return this;
+        }
         this.cookies.push({ name, value, ...options });
         return this;
+    }
+
+    /**
+     * Set cookie bertanda tangan (signed cookie).
+     *
+     * Nilai cookie dilindungi HMAC dengan `secret`, sehingga client bisa
+     * membaca nilainya tetapi tidak bisa memalsukan atau memodifikasinya.
+     * Opsi `signed`/`secret` pada `cookie()` biasa juga didukung; fungsi
+     * ini hanya jalan pintas yang mewajibkan secret ada.
+     */
+    signedCookie(name, value, options = {}) {
+        if (!options.secret) {
+            throw new ValidationError('Secret wajib diisi untuk signed cookie');
+        }
+        return this.cookie(name, value, { ...options, signed: true });
     }
 
     /** Kirim JSON. */
@@ -181,6 +297,15 @@ class Response {
         if (this.cookies.length > 0) {
             headers['set-cookie'] = this.cookies.map(serializeCookie);
         }
+        // Header keamanan bawaan. Disini — bukan di server — supaya
+        // respons statis, respons error, dan respons handler sama-sama
+        // terlindungi, dan supaya aplikasi bisa menimpanya per-route
+        // dengan `response.set(...)`.
+        if (this.securityHeaders) {
+            for (const [name, value] of Object.entries(this.securityHeaders)) {
+                if (headers[name] === undefined) headers[name] = value;
+            }
+        }
         return headers;
     }
 }
@@ -209,6 +334,78 @@ class Server {
         this.isShuttingDown = false;
         this.httpServer = null;
         this.connections = new Set();
+        // Header keamanan aktif untuk server ini. `false` mematikan
+        // seluruhnya; object menimpa sebagian bawaan.
+        this.securityHeaders = resolveSecurityHeaders(options.securityHeaders);
+
+        // Helper cache service worker disediakan runtime supaya aplikasi
+        // tidak perlu menyalin berkas runtime ke folder public-nya.
+        // Rute bawaan ini selalu didahulukan oleh berkas statis karena
+        // route terdaftar diproses sebelum fallback statis.
+        this.installRuntimeRoutes();
+    }
+
+    /**
+     * Pasang rute bawaan yang menyediakan helper service worker.
+     */
+    installRuntimeRoutes() {
+        this.router.get('/bonang/sw-cache.js', (ctx) => {
+            const helperPath = require.resolve('../client/sw-cache.js');
+            const source = fs.readFileSync(helperPath, 'utf8');
+            ctx.response.type('text/javascript; charset=utf-8');
+            ctx.response.send(source);
+        });
+
+        // Manifest precache dibuat oleh `bonang build` di folder build.
+        // Service worker membacanya untuk tahu hash tiap aset.
+        this.router.get('/precache-manifest.json', (ctx) => {
+            const manifestPath = this.findPrecacheManifest();
+            if (!manifestPath) {
+                ctx.response.status(404).json({
+                    status: 'error',
+                    msg: 'Manifest precache belum dibuat — jalankan `bonang build`'
+                });
+                return;
+            }
+            ctx.response.type('application/json; charset=utf-8');
+            ctx.response.send(fs.readFileSync(manifestPath, 'utf8'));
+        });
+    }
+
+    /**
+     * Cari berkas `precache-manifest.json` di lokasi yang wajar.
+     *
+     * Lokasi diperiksa berurutan: root build (`dist/`), folder statis
+     * yang dikonfigurasi, dan direktori kerja. Dengan begitu service
+     * worker tetap menemukan manifest baik saat dev (root proyek) maupun
+     * saat produksi (folder `dist/`).
+     */
+    findPrecacheManifest() {
+        const candidates = [];
+
+        // Root build: dirname dari lokasi skrip server saat produksi.
+        try {
+            candidates.push(path.join(path.dirname(require.main.filename), 'precache-manifest.json'));
+        } catch {
+            // `require.main` tidak selalu ada (mis. saat di-embed).
+        }
+
+        const roots = Array.isArray(this.staticDir) ? this.staticDir : [this.staticDir];
+        for (const root of roots) {
+            if (!root) continue;
+            candidates.push(path.resolve(root, 'precache-manifest.json'));
+            candidates.push(path.resolve(root, '..', 'precache-manifest.json'));
+        }
+
+        candidates.push(path.resolve(process.cwd(), 'precache-manifest.json'));
+        candidates.push(path.resolve(process.cwd(), 'dist', 'precache-manifest.json'));
+
+        for (const candidate of candidates) {
+            if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
+                return candidate;
+            }
+        }
+        return null;
     }
 
     route(path, handler, options) {
@@ -310,7 +507,7 @@ class Server {
         const startedAt = process.hrtime.bigint();
 
         const request = new Request(rawReq, this);
-        const response = new Response(rawRes);
+        const response = new Response(rawRes, this.securityHeaders);
 
         try {
             if (this.isShuttingDown) {
@@ -550,4 +747,12 @@ function matchesType(value, type) {
     }
 }
 
-module.exports = { Server, Request, Response, parseCookies, serializeCookie };
+module.exports = {
+    Server,
+    Request,
+    Response,
+    parseCookies,
+    serializeCookie,
+    DEFAULT_SECURITY_HEADERS,
+    resolveSecurityHeaders
+};

@@ -181,15 +181,47 @@
     // ===== SYNC QUEUE =====
 
     /**
+     * Batas default jumlah entri dalam antrean sinkronisasi.
+     *
+     * Nilai 500 cukup untuk pemakaian normal (perubahan offline berhari-hari
+     * pada satu perangkat) sekaligus membatasijejak penyimpanan lokal bila
+     * server tidak pernah bisa dihubungi.
+     */
+    const DEFAULT_QUEUE_MAX_SIZE = 500;
+
+    /**
+     * Dilempar saat antrean sinkronisasi sudah penuh.
+     */
+    class QueueOverflowError extends Error {
+        constructor(message, details = {}) {
+            super(message);
+            this.name = 'QueueOverflowError';
+            this.code = 'QUEUE_OVERFLOW';
+            this.details = details;
+        }
+    }
+
+    /**
      * Antrean perubahan lokal yang menunggu dikirim ke server.
      *
      * Setiap entri antrean: { id, entity, op, payload, baseVersion, timestamp }
      * `op` berisi 'create', 'update', 'delete'.
+     *
+     * Antrean punya batas ukuran (`maxSize`, default 500) agar tidak tumbuh
+     * tak terbatas ketika server terus gagal menerima perubahan. Saat batas
+     * tercapai, `enqueue` melempar `QueueOverflowError` alih-alih menerima
+     * perubahan baru — membiarkan antrean membengkak akan memenuhi
+     * penyimpanan lokal dan membuat sinkronisasi tidak pernah selesai.
+     * Aplikasi boleh menangkap galat ini dan memberi tahu pengguna.
      */
     class SyncQueue {
         constructor(options = {}) {
             this.store = options.store;
             this.storeName = options.storeName || 'syncQueue';
+            this.maxSize = Number.isFinite(options.maxSize) && options.maxSize > 0
+                ? Math.floor(options.maxSize)
+                : DEFAULT_QUEUE_MAX_SIZE;
+            this.hydrated = false;
             this.pending = new Map();
             this.online = typeof navigator !== 'undefined' ? navigator.onLine !== false : true;
             this.listeners = [];
@@ -215,9 +247,24 @@
         /**
          * Masukkan operasi ke antrean. Identitas id dipakai sebagai kunci
          * sehingga perubahan berulang pada entitas yang sama saling menimpa.
+         *
+         * Melempar `QueueOverflowError` bila antrean sudah penuh dan entri
+         * baru bukan penggantian entri yang sudah ada.
          */
         async enqueue(operation) {
             const id = operation.id || `${operation.entity}:${operation.op}:${Date.now()}`;
+
+            // Hidrasi sekali dari penyimpanan. Tanpa ini, batas ukuran bisa
+            // dilewati karena `this.pending` masih kosong padahal IndexedDB
+            // sudah berisi banyak entri dari sesi sebelumnya. Hidrasi
+            // dilakukan sekali saja supaya biaya enqueue tetap konstan.
+            if (this.store && !this.hydrated) {
+                const rows = await this.store.getAll(this.storeName);
+                this.pending.clear();
+                for (const row of rows) this.pending.set(row.id, row);
+                this.hydrated = true;
+            }
+
             const entry = {
                 id,
                 entity: operation.entity,
@@ -226,6 +273,19 @@
                 baseVersion: operation.baseVersion || null,
                 timestamp: operation.timestamp || new Date().toISOString()
             };
+
+            // Entri dengan id yang sama menimpa yang lama — tidak menambah
+            // panjang antrean, jadi tidak bisa melewati batas.
+            const isReplacement = this.pending.has(id);
+
+            if (!isReplacement && this.pending.size >= this.maxSize) {
+                throw new QueueOverflowError(
+                    `Antrean sinkronisasi penuh (${this.maxSize} entri). ` +
+                    'Selesaikan sinkronisasi sebelum menambah perubahan baru.',
+                    { maxSize: this.maxSize, id }
+                );
+            }
+
             this.pending.set(id, entry);
             if (this.store) {
                 await this.store.put(this.storeName, entry);
@@ -330,6 +390,152 @@
         return { items: [...map.values()], conflicts };
     }
 
+    // ===== SINKRONISASI LATAR BELAKANG =====
+
+    /**
+     * API Background Sync browser.
+     *
+     * Dijaga agar modul ini tetap bisa dimuat di Node (test) dan di
+     * browser tanpa error ketika API-nya tidak ada.
+     */
+    function getBackgroundSyncManager() {
+        if (typeof navigator === 'undefined') return null;
+        const scope = navigator.serviceWorker;
+        if (!scope || !('sync' in scope)) return null;
+        return scope.sync;
+    }
+
+    /**
+     * Daftarkan sinkronisasi latar belakang untuk service worker.
+     *
+     * Background Sync membiarkan service worker menjalankan sinkronisasi
+     * nanti — misalnya saat koneksi kembali tersedia — tanpa perlu tab
+     * aplikasi tetap terbuka.
+     *
+     * Mengembalikan `{ supported, registered, error }`. Tidak pernah
+     * melempar: kemampuan ini bersifat opsional dan browser yang tidak
+     * mendukungnya harus tetap bisa memakai sinkronisasi manual.
+     */
+    async function registerBackgroundSync(tag = 'bonang-sync', options = {}) {
+        const manager = getBackgroundSyncManager();
+        if (!manager) {
+            return { supported: false, registered: false, reason: 'Background Sync tidak didukung' };
+        }
+        try {
+            await manager.register(tag, options);
+            return { supported: true, registered: true, tag };
+        } catch (err) {
+            return { supported: true, registered: false, tag, error: err.message };
+        }
+    }
+
+    /**
+     * Klien BroadcastChannel untuk sinkronisasi antar-tab.
+     *
+     * Tanpa ini, dua tab yang terbuka bisa saling menimpa perubahan
+     * lokal karena keduanya bekerja dari salinan antrean yang berbeda.
+     * Dengan BroadcastChannel, satu tab memberi tahu tab lain ketika
+     * entri antrean berubah, sehingga tab lain bisa memuat ulang
+     * state-nya (atau memicu flush).
+     *
+     * Bila `BroadcastChannel` tidak tersedia (browser lama, atau Node
+     * tanpa flag), kelas tetap bisa dibuat — hanya tidak ada kanal yang
+     * terpakai, dan `post()` menjadi no-op.
+     */
+    class BroadcastSync {
+        constructor(options = {}) {
+            this.channelName = options.channelName || 'bonang-sync';
+            this.listeners = [];
+            this.channel = null;
+            this.supported = false;
+
+            if (typeof BroadcastChannel !== 'undefined') {
+                this.channel = new BroadcastChannel(this.channelName);
+                this.supported = true;
+                this.channel.onmessage = (event) => {
+                    const data = event && event.data;
+                    if (!data || typeof data.type !== 'string') return;
+                    for (const fn of this.listeners) {
+                        try {
+                            fn(data);
+                        } catch {
+                            // Satu listener yang gagal tidak boleh
+                            // menghentikan listener lain.
+                        }
+                    }
+                };
+            }
+        }
+
+        /**
+         * Daftarkan callback yang dipanggil saat pesan antar-tab diterima.
+         */
+        subscribe(fn) {
+            this.listeners.push(fn);
+            return () => {
+                this.listeners = this.listeners.filter((l) => l !== fn);
+            };
+        }
+
+        /**
+         * Kirim pesan ke tab lain.
+         */
+        post(type, payload = {}) {
+            if (!this.channel) return false;
+            this.channel.postMessage({ type, payload, timestamp: new Date().toISOString() });
+            return true;
+        }
+
+        /** Tutup kanal. */
+        close() {
+            if (this.channel) {
+                this.channel.close();
+                this.channel = null;
+                this.supported = false;
+            }
+        }
+    }
+
+    /**
+     * Hubungkan antrean sinkronisasi dengan sinkronisasi antar-tab.
+     *
+     * Setiap perubahan antrean disiarkan ke tab lain. Tab lain yang
+     * menerima broadcast tahu ada perubahan dan bisa memuat ulang
+     * antrean (atau langsung flush).
+     *
+     * @param {SyncQueue} queue
+     * @param {BroadcastSync} bus
+     * @param {object} options { onRemoteChange } callback saat tab lain berubah.
+     */
+    function linkQueueToBroadcast(queue, bus, options = {}) {
+        if (!queue || !bus) return () => {};
+
+        const originalEnqueue = queue.enqueue.bind(queue);
+        const originalRemove = queue.remove.bind(queue);
+
+        queue.enqueue = async (operation) => {
+            const entry = await originalEnqueue(operation);
+            bus.post('queue:changed', { action: 'enqueue', id: entry.id, entity: entry.entity });
+            return entry;
+        };
+
+        queue.remove = async (id) => {
+            await originalRemove(id);
+            bus.post('queue:changed', { action: 'remove', id });
+        };
+
+        const unsubscribe = bus.subscribe((message) => {
+            if (message.type !== 'queue:changed') return;
+            if (options.onRemoteChange) options.onRemoteChange(message.payload || {});
+        });
+
+        return () => {
+            queue.enqueue = originalEnqueue;
+            queue.remove = originalRemove;
+            unsubscribe();
+        };
+    }
+
     // ===== NETWORK =====
 
     /**
@@ -409,10 +615,15 @@
         on,
         IndexedDBStore,
         SyncQueue,
+        QueueOverflowError,
+        DEFAULT_QUEUE_MAX_SIZE,
         resolveConflict,
         reconcile,
         apiFetch,
         registerServiceWorker,
-        ConnectionStatus
+        ConnectionStatus,
+        registerBackgroundSync,
+        BroadcastSync,
+        linkQueueToBroadcast
     };
 });

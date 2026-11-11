@@ -4,14 +4,38 @@
 //  - cache aset statis (HTML, CSS, JS) agar aplikasi bisa dibuka offline
 //  - fallback ke cache untuk request navigasi
 //  - API GET tidak di-cache (data produk disimpan di IndexedDB, bukan Cache API)
+//  - invalidasi cache PER-FILE: aset yang berubah di server langsung
+//    dibuang dari cache, aset yang tidak berubah tetap dipakai.
+//
+// Invalidasi per-file memakai `precache-manifest.json` yang dihasilkan
+// `bonang build`. Manifest memuat hash per file; service worker
+// membandingkannya dengan hash yang tersimpan pada entri cache.
+//
+// Kapan manifest diperiksa ulang?
+// --------------------------------
+// Service worker hanya diaktifkan ulang ketika berkas `sw.js` berubah —
+// padahal isi aset bisa berubah tanpa `sw.js` ikut berubah. Karena itu
+// manifest diperiksa ulang pada setiap **navigasi** (satu kali per
+// halaman dimuat), lalu entri cache yang basi dibuang. Aset individual
+// tetap memakai hash dari manifest terbaru itu.
 
-const CACHE_NAME = "bonang-crud-demo-v1";
-const PRECACHE_URLS = ["/", "/index.html", "/style.css", "/client.js"];
+importScripts("/bonang/sw-cache.js");
+
+const CACHE_NAME = "bonang-crud-demo";
+const MANIFEST_URL = "/precache-manifest.json";
+
+// Navigasi yang harus tetap tersedia saat offline.
+const OFFLINE_FALLBACK = "/index.html";
+
+const invalidator = new BonangCache.CacheInvalidator({
+    cacheName: CACHE_NAME,
+    manifestUrl: MANIFEST_URL
+});
 
 self.addEventListener("install", (event) => {
     event.waitUntil(
         caches.open(CACHE_NAME)
-            .then((cache) => cache.addAll(PRECACHE_URLS))
+            .then((cache) => cache.addAll(["/", OFFLINE_FALLBACK]))
             .then(() => self.skipWaiting())
     );
 });
@@ -37,34 +61,52 @@ self.addEventListener("fetch", (event) => {
     // Request API selalu ke jaringan — status sinkronisasi harus akurat.
     if (url.pathname.startsWith("/api/")) return;
 
-    // Navigasi: coba jaringan, jatuh ke cache saat offline.
+    // Manifest sendiri tidak boleh di-cache — isinya harus selalu
+    // mencerminkan build terbaru.
+    if (url.pathname === MANIFEST_URL) return;
+
+    // Navigasi: segarkan manifest, buang entri basi, lalu coba jaringan
+    // dan jatuh ke cache saat offline.
     if (request.mode === "navigate") {
         event.respondWith(
-            fetch(request)
-                .then((response) => {
+            (async () => {
+                const manifest = await invalidator.loadManifest(true);
+                await invalidator.prune(manifest);
+
+                try {
+                    const response = await fetch(request);
                     const copy = response.clone();
-                    caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
+                    const cache = await caches.open(CACHE_NAME);
+                    await cache.put(request, copy);
                     return response;
-                })
-                .catch(() => caches.match("/index.html"))
+                } catch {
+                    const cached = await caches.match(OFFLINE_FALLBACK);
+                    if (cached) return cached;
+                    throw new Error('Halaman tidak tersedia dan tidak ada salinan offline');
+                }
+            })()
         );
         return;
     }
 
-    // Aset statis: sajikan dari cache, perbarui di belakang layar.
+    // Aset statis: sajikan dari cache bila hash-nya masih cocok,
+    // perbarui di belakang layar bila basi.
     event.respondWith(
-        caches.match(request).then((cached) => {
+        (async () => {
+            const manifest = await invalidator.loadManifest();
+            const fresh = await invalidator.matchFresh(request, manifest);
+
             const network = fetch(request)
-                .then((response) => {
+                .then(async (response) => {
                     if (response.ok) {
-                        const copy = response.clone();
-                        caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
+                        const cache = await caches.open(CACHE_NAME);
+                        await invalidator.store(cache, request, response, manifest);
                     }
                     return response;
                 })
-                .catch(() => cached);
+                .catch(() => fresh);
 
-            return cached || network;
-        })
+            return fresh || network;
+        })()
     );
 });

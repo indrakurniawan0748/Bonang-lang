@@ -323,6 +323,19 @@ class NewExpression extends Node {
     }
 }
 
+/**
+ * Ekspresi `import("...")` — pemuatan modul saat runtime.
+ *
+ * Berbeda dari `ImportDeclaration` yang statis, ekspresi ini evaluating
+ * argumennya saat runtime dan mengembalikan Promise berisi namespace modul.
+ */
+class ImportExpression extends Node {
+    constructor(source, line, column) {
+        super('ImportExpression', line, column);
+        this.source = source;
+    }
+}
+
 class MemberExpression extends Node {
     constructor(object, property, computed, optional, line, column) {
         super('MemberExpression', line, column);
@@ -414,6 +427,7 @@ module.exports = {
     ConditionalExpression,
     CallExpression,
     NewExpression,
+    ImportExpression,
     MemberExpression,
     ArrowFunctionExpression,
     ThisExpression,

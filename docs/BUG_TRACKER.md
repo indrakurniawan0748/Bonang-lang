@@ -783,6 +783,393 @@ Status: `Fixed` (perbaikan diterapkan dan ada regression test), `Open`
 
 ---
 
+## BNG-040 — Server tidak mengirim satu pun header keamanan
+
+- **Tanggal**: 2026-11-11
+- **Komponen**: `runtime/http/server.js`, `runtime/filesystem/files.js`
+- **Severity**: High
+- **Deskripsi**: Setiap respons HTTP dari server Bonang dikirim tanpa
+  header keamanan apa pun: tidak ada `Content-Security-Policy`,
+  `X-Frame-Options`, `X-Content-Type-Options`, maupun `Referrer-Policy`.
+  `docs/CHANGELOG.md` sudah mengklaim "header keamanan" sebagai fitur
+  runtime — klaim itu tidak benar, karena tidak ada satupun header yang
+  dikirim.
+- **Root cause**: Header keamanan tidak pernah diimplementasikan.
+  `Response.buildHeaders()` hanya menyalin header yang di-set aplikasi
+  dan menambahkan `Set-Cookie`. Aset statis bahkan tidak melewati
+  `buildHeaders()` sama sekali — `streamFile()` menulis langsung ke
+  `response.raw`, sehingga tidak ada tempat sentral untuk memasang
+  header.
+- **Perbaikan**:
+  1. `DEFAULT_SECURITY_HEADERS` ditetapkan di `runtime/http/server.js`:
+     `Content-Security-Policy` (`default-src 'self'`, tanpa
+     `unsafe-inline`/`unsafe-eval`), `X-Frame-Options: SAMEORIGIN`,
+     `X-Content-Type-Options: nosniff`,
+     `Referrer-Policy: strict-origin-when-cross-origin`,
+     `Permissions-Policy`, dan `X-XSS-Policy: 0`.
+  2. Header dipasang di `Response.buildHeaders()` sehingga berlaku pada
+     respons JSON, teks, redirect, respons error, **dan** aset statis.
+     Header yang di-set aplikasi menang — ini memberi jalan keluar
+     untuk aplikasi yang butuh CSP berbeda.
+  3. `streamFile()` memasang header yang sama, karena jalur itu menulis
+     langsung ke `response.raw`.
+  4. Opsi `createServer({ securityHeaders })`:
+     - tidak diisi -> pakai bawaan
+     - object -> gabung dengan bawaan, nilai aplikasi menang
+     - `{ "x-frame-options": null }` -> hapus satu header tertentu
+     - `false` -> matikan seluruhnya
+- **Fix applied**: Ya.
+- **Regression test**: `tests/security/security.test.js` — 9 test:
+  1. respons JSON membawa header keamanan bawaan
+  2. CSP melarang skrip dan objek dari luar origin (tanpa
+     `unsafe-inline`/`unsafe-eval`)
+  3. respons error 404 juga membawa header keamanan
+  4. aset statis juga membawa header keamanan
+  5. aplikasi bisa menimpa header bawaan
+  6. aplikasi bisa menonaktifkan satu header
+  7. `securityHeaders: false` mematikan seluruhnya
+  8. handler bisa menimpa header per-route
+  9. `resolveSecurityHeaders` menolak tipe opsi yang salah
+- **Status**: Fixed
+
+---
+
+## BNG-041 — `whereRaw`/`having` menerima SQL mentah tanpa validasi apa pun
+
+- **Tanggal**: 2026-11-11
+- **Komponen**: `runtime/database/query-builder.js`, `cli/auditor.js`
+- **Severity**: High
+- **Deskripsi**: `whereRaw(sql, ...params)` dan `having(sql, ...params)`
+  menerima string SQL mentah tanpa pemeriksaan apa pun. Auditor juga
+  tidak menganalisis pemanggilan kedua metode itu — SQL mentah adalah
+  celah injeksi yang sama seperti SQL template, tapi tidak dilaporkan.
+  Dua kelas bug yang bisa lolos:
+  1. `whereRaw("id = ?; DROP TABLE x", 1)` — statement kedua ikut dieksekusi.
+  2. `whereRaw("name = ? AND price > ?", a)` — hanya satu parameter dikirim,
+     sehingga `a` terikat ke `price` dan kondisi `name` salah.
+- **Root cause**: Kedua metode diperlakukan sebagai "escape hatch" yang
+  sepenuhnya trusting. Tidak ada validasi bentuk SQL maupun pencocokan
+  jumlah placeholder dengan jumlah parameter. Di sisi auditor, aturan
+  `checkSqlTemplates` hanya menelusuri `TemplateLiteral`, sehingga
+  template literal yang diteruskan ke `whereRaw`/`having` tidak pernah
+  diperiksa.
+- **Perbaikan**:
+  1. Fungsi baru `assertRawSql(sql, paramCount)` di
+     `runtime/database/query-builder.js`:
+     - menolak SQL kosong,
+     - menolak statement tambahan (`;` di luar string literal),
+     - menolak jumlah placeholder `?` yang tidak sama dengan jumlah
+       parameter.
+     `?` dan `;` di dalam string literal tidak ikut dihitung.
+  2. Auditor punya aturan baru `sql-injection-raw` (severity critical)
+     yang memeriksa argumen pertama `whereRaw`/`having`:
+     - `TemplateLiteral` dengan interpolasi data user -> dilaporkan,
+     - `BinaryExpression` `+` yang memuat data user -> dilaporkan.
+     Placeholder dengan parameter terpisah tidak dilaporkan.
+- **Fix applied**: Ya.
+- **Regression test**:
+  - `tests/database/database.test.js` — 6 test: statement tambahan
+    ditolak, jumlah placeholder tidak cocok ditolak (pada `whereRaw` dan
+    `having`), placeholder yang cocok diterima, titik koma di dalam
+    string literal bukan statement tambahan, SQL kosong ditolak.
+  - `tests/tools/auditor.test.js` — 5 test: `whereRaw` dengan data user
+    dilaporkan, `having` dengan data user dilaporkan, placeholder aman
+    tidak dilaporkan, operator `+` dengan data user dilaporkan, `whereRaw`
+    tanpa data user tidak dilaporkan.
+- **Status**: Fixed
+
+---
+
+## BNG-042 — Antrean sinkronisasi tumbuh tanpa batas
+
+- **Tanggal**: 2026-11-11
+- **Komponen**: `runtime/client/client.js`
+- **Severity**: Medium
+- **Deskripsi**: `SyncQueue.enqueue()` menerima operasi tanpa batas
+  jumlah. Bila server terus gagal menerima perubahan (server mati,
+  endpoint salah, konflik yang tidak pernah diputuskan), antrean tumbuh
+  tanpa batas sampai penyimpanan lokal penuh dan sinkronisasi tidak
+  pernah bisa diselesaikan.
+- **Root cause**: `enqueue()` tidak pernah memeriksa ukuran antrean.
+  `this.pending` juga hanya diisi di memori, sehingga pemeriksaan ukuran
+  (bila ditambah) tidak akan melihat entri yang sudah tersimpan dari
+  sesi sebelumnya.
+- **Perbaikan**:
+  1. Batas default `DEFAULT_QUEUE_MAX_SIZE = 500`, dapat disesuaikan lewat
+     `new SyncQueue({ maxSize })`.
+  2. `enqueue()` melakukan hidrasi **sekali** dari IndexedDB, sehingga
+     entri dari sesi sebelumnya ikut diperhitungkan.
+  3. Saat batas tercapai, `enqueue()` melempar `QueueOverflowError`
+     (`code: 'QUEUE_OVERFLOW'`) alih-alih menerima perubahan baru.
+     Entri dengan `id` yang sama tetap diperbolehkan karena itu
+     menimpa entri lama, bukan menambah panjang antrean.
+- **Fix applied**: Ya.
+- **Regression test**: `tests/offline/offline.test.js` — 5 test: antrean
+  penuh menolak entri baru, entri dengan id sama menimpa tanpa
+  melewati batas, entri tersimpan dari sesi sebelumnya ikut
+  diperhitungkan, batas default ada dan bernilai wajar, antrean bisa
+  ditambah lagi setelah entri dihapus.
+- **Status**: Fixed
+
+---
+
+## BNG-043 — Service worker tidak bisa membatalkan cache per-file
+
+- **Tanggal**: 2026-11-11
+- **Komponen**: `runtime/client/sw-cache.js`, `cli/cli.js`,
+  `runtime/http/server.js`, `apps/bonang-crud-demo/public/sw.js`
+- **Severity**: Medium
+- **Deskripsi**: Service worker memakai pola satu cache ber-versi
+  (`bonang-crud-demo-v1`). Setiap aset yang berubah memaksa pengguna
+  mengunduh ulang **seluruh** aset, dan aset yang tidak berubah ikut
+  terbuang. Sebaliknya, kalau nama cache tidak dinaikkan, aset lama
+  bertahan selamanya. Tidak ada mekanisme invalidasi per-file.
+- **Root cause**: Service worker hanya menyimpan respons apa adanya,
+  tanpa metadata hash. Tidak ada cara untuk tahu file mana yang berubah
+  sejak cache terisi. Selain itu `sw.js` yang sudah terdaftar tidak
+  diaktifkan ulang kecuali berkasnya berubah — padahal isi aset bisa
+  berubah tanpa `sw.js` ikut berubah.
+- **Perbaikan**:
+  1. `bonang build` menulis `precache-manifest.json` berisi hash
+     SHA-256 (dipotong 16 hex) per URL aset, plus `version` gabungan.
+  2. `runtime/client/sw-cache.js` — helper baru dengan
+     `CacheInvalidator`:
+     - `prune(manifest)` menghapus entri cache yang hash-nya tidak cocok
+       dengan manifest. Hanya file yang berubah yang terhapus.
+     - `matchFresh(request, manifest)` hanya melayani entri yang
+       hash-nya masih cocok.
+     - `store(...)` memasang header `X-Bonang-Cache-Hash` pada entri
+       cache.
+     - `loadManifest(force)` mengambil ulang manifest dari jaringan saat
+       diminta; manifest lama dipertahankan bila request gagal.
+  3. Service worker memeriksa ulang manifest pada setiap **navigasi** —
+     titik di mana pengguna pasti melihat perubahan. Aset individual
+     memakai hash dari manifest terbaru.
+  4. Rute bawaan runtime `/bonang/sw-cache.js` menyajikan helper, dan
+     `/precache-manifest.json` menyajikan manifest — tanpa perlu aplikasi
+     menyalin berkas runtime ke folder `public/`.
+- **Fix applied**: Ya.
+- **Regression test**: `tests/tools/sw-cache.test.js` — 8 test: hash
+  deterministik dan berbeda untuk isi berbeda, `cacheKey` menghasilkan
+  pathname, `prune` menghapus hanya file yang berubah, `matchFresh`
+  menolak entri basi, `store` memasang header hash, `loadManifest`
+  mengambil ulang saat dipaksa, manifest gagal tidak menimpa manifest
+  lama, file di luar manifest tidak dihapus.
+- **Verifikasi di browser**: Chrome 157 (CDP). Setelah `style.css`
+  diubah dan di-build ulang:
+  ```
+  BEFORE hash style.css: 22604cbc22b908ea
+  BEFORE hash client.js: 633967ecff36c8cc
+  AFTER  hash style.css: 363d59d6b55dd405   <- berubah, entri di-refresh
+  AFTER  hash client.js: 633967ecff36c8cc   <- tetap, cache dipertahankan
+  ```
+- **Status**: Fixed
+
+---
+
+## BNG-044 — Tidak ada signed cookie bawaan
+
+- **Tanggal**: 2026-11-11
+- **Komponen**: `runtime/security/security.js`, `runtime/http/server.js`
+- **Severity**: Medium
+- **Deskripsi**: Runtime HTTP hanya menyediakan `response.cookie()` biasa.
+  Nilai cookie sepenuhnya dipercaya client — client bisa menulis nilai
+  cookie apa pun, dan server tidak punya cara membedakannya dari nilai
+  asli. Aplikasi yang butuh cookie integritas harus memanggil
+  `sign`/`verifySignature` secara manual untuk tiap cookie, dengan
+  format sendiri yang tidak seragam antar aplikasi.
+- **Root cause**: Ketegangan antara "cookie menyimpan id sesi" (yang
+  memang harus ditandatangani) dan "cookie menyimpan preferensi" (yang
+  tidak). Karena tidak ada primitive bertanda tangan, setiap aplikasi
+  menduplikasi logikanya sendiri.
+- **Perbaikan**:
+  - `signValue(value, secret)` menghasilkan `nilai.signature` dengan
+    HMAC-SHA256.
+  - `verifySignedValue(signed, secret)` mengembalikan nilai asli bila
+    signature cocok, atau `null` bila cookie tidak bertanda tangan, rusak,
+    atau dipalsukan. Perbandingan signature tetap timing-safe.
+  - `response.signedCookie(name, value, { secret })` dan
+    `response.cookie(name, value, { signed: true, secret })` menandatangani
+    nilai sebelum dikirim. Tanpa `secret`, keduanya melempar
+    `ValidationError` — cookie yang tampak bertanda tangan tapi tidak
+    bertanda tangan adalah kondisi yang lebih berbahaya daripada error.
+  - `request.signedCookie(name, secret, fallback)` membaca dan
+    memverifikasi cookie. Cookie yang gagal verifikasi dikembalikan
+    sebagai `fallback` (default `null`), sama dengan cookie yang tidak
+    ada — caller tidak boleh bisa membedakan keduanya.
+  - Pemisah memakai `.` yang di-encode oleh `encodeURIComponent`, dan
+    pemisahan selalu dilakukan pada **pemisah terakhir**, sehingga nilai
+    yang mengandung titik tidak salah dipecah.
+- **Regression test**: `tests/security/security.test.js` — 11 test:
+  `signValue` menghasilkan nilai bertanda tangan; verifikasi berhasil;
+  secret salah ditolak; manipulasi nilai ditolak; input rusak ditolak;
+  nilai berisi titik ditangani; `signedCookie` mengirim cookie
+  bertanda tangan; `request.signedCookie` membaca cookie valid, menolak
+  cookie palsu, dan mengembalikan null untuk cookie yang tidak ada;
+  signed cookie tanpa secret ditolak.
+- **Status**: Fixed
+
+---
+
+## BNG-045 — Pagination hanya berbasis offset
+
+- **Tanggal**: 2026-11-11
+- **Komponen**: `runtime/database/query-builder.js`
+- **Severity**: Medium
+- **Deskripsi**: `paginate()` memakai `LIMIT ... OFFSET n`. Biaya query
+  naik seiring naiknya `n` — SQLite harus memindai dan membuang `n`
+  baris lebih dulu. Pada tabel besar, halaman terakhir jauh lebih lambat
+  daripada halaman pertama. Selain itu, baris bisa bergeser di antara
+  halaman bila ada data yang masuk atau keluar, sehingga satu baris bisa
+  muncul di dua halaman atau hilang sama sekali.
+- **Root cause**: `paginate()` adalah satu-satunya primitive paginasi;
+  tidak ada paginasi berbasis kursor yang tersedia.
+- **Perbaikan**: menambah `paginateByCursor(cursor, perPage, options)`.
+  - Cursor berbentuk object `{ [kolom]: nilai }` yang menunjuk baris
+    terakhir yang sudah dilihat.
+  - **Dua kolom** dipakai: `orderColumn` (default `id`) dan `tieColumn`
+    (default `id`). Satu kolom saja tidak cukup deterministik — beberapa
+    baris bisa punya nilai pengurutan yang sama, sehingga cursor satu
+    kolom akan melompati atau mengulang baris. Kondisi cursor untuk ASC:
+    `(a > ?) OR (a = ? AND b > ?)`; untuk DESC memakai `<`.
+  - Seluruh nilai cursor disisipkan sebagai **placeholder**, bukan
+    nilai mentah — payload injeksi pada cursor diperlakukan sebagai data.
+  - `hasNext` ditentukan dengan mengambil `perPage + 1` baris, bukan
+    `COUNT(*)` — `COUNT` pada tabel besar mahal dan tidak perlu.
+  - `meta.nextCursor` bernilai `null` pada halaman terakhir.
+- **Regression test**: `tests/database/database.test.js` — 7 test:
+  halaman pertama tanpa cursor; seluruh baris terkirim tepat satu kali
+  (diuji dengan `Set` untuk memastikan tidak ada duplikasi); baris dengan
+  nilai kolom pengurutan yang sama tidak terlewat; halaman terakhir tidak
+  punya cursor; arah DESC; nama kolom berbahaya ditolak; cursor berisi
+  payload injeksi diperlakukan sebagai data dan tabel tetap utuh.
+- **Status**: Fixed
+
+---
+
+## BNG-046 — Sinkronisasi hanya berjalan saat aplikasi aktif
+
+- **Tanggal**: 2026-11-11
+- **Komponen**: `runtime/client/client.js`
+- **Severity**: Medium
+- **Deskripsi**: Antrean sinkronisasi hanya ter-flush ketika aplikasi
+  memanggil `flush()` secara eksplisit. Bila tab ditutup atau perangkat
+  offline terlalu lama, perubahan lokal tidak terkirim ke server sampai
+  aplikasi dibuka lagi. Ini membuat aplikasi offline-first terasa
+  "kehilangan data" bagi pengguna.
+- **Root cause**: Runtime client tidak pernah berinteraksi dengan
+  service worker untuk menjadwalkan pekerjaan latar belakang.
+- **Perbaikan**: menambah `registerBackgroundSync(tag, options)` yang
+  mendaftarkan tag ke `navigator.serviceWorker.sync`.
+  - Mengembalikan `{ supported, registered, tag, error? }` — tidak pernah
+    melempar, karena Background Sync bersifat opsional dan browser yang
+    tidak mendukungnya harus tetap bisa memakai sinkronisasi manual.
+  - Kegagalan pendaftaran dilaporkan lewat `error`, bukan dilempar, agar
+    pemanggil bisa memutuskan haruskah fallback ke sinkronisasi manual.
+  - `navigator.serviceWorker.sync` dijaga agar modul tetap bisa dimuat di
+    Node (test) dan browser tanpa error.
+- **Catatan**: Background Sync hanya didukung Chromium. Firefox dan
+  Safari belum menerapkannya — untuk browser itu, sinkronisasi tetap
+  bergantung pada flush manual. Ini batasan platform, bukan bug.
+- **Regression test**: `tests/offline/offline.test.js` — 3 test:
+  pendaftaran tag tercatat di service worker; browser tanpa dukungan
+  dilaporkan `supported: false` tanpa melempar; kegagalan pendaftaran
+  dilaporkan lewat `error`.
+- **Status**: Fixed
+
+---
+
+## BNG-047 — Dua tab bisa saling menimpa perubahan lokal
+
+- **Tanggal**: 2026-11-11
+- **Komponen**: `runtime/client/client.js`
+- **Severity**: Medium
+- **Deskripsi**: Dua tab dari aplikasi yang sama bekerja dari salinan
+  antrean lokal masing-masing. Tab A menambahkan perubahan, Tab B
+  menambahkan perubahan untuk entitas yang sama, lalu Tab B melakukan
+  flush — Tab A tidak pernah tahu dan perubahan Tab A hilang.
+- **Root cause**: Runtime client tidak punya kanal komunikasi antar-tab.
+  `BroadcastChannel` adalah API browser standar untuk ini, tapi tidak
+  dipakai.
+- **Perbaikan**:
+  - `BroadcastSync` — wrapper `BroadcastChannel` dengan
+    `subscribe(fn)`, `post(type, payload)`, `close()`.
+  - `linkQueueToBroadcast(queue, bus, options)` — menyambungkan antrean
+    ke kanal: setiap `enqueue` dan `remove` disiarkan sebagai
+    `queue:changed`. Mengembalikan fungsi yang melepas sambungan
+    sekaligus mengembalikan method antrean ke bentuk semula.
+  - Bila `BroadcastChannel` tidak tersedia, kelas tetap bisa dibuat:
+    `supported` bernilai `false` dan `post()` menjadi no-op — bukan
+    error. Browser lama tidak boleh membuat aplikasi crash.
+  - Listener yang melempar tidak menghentikan listener lain.
+- **Catatan**: `BroadcastChannel` hanya bekerja pada origin yang sama.
+  Ini sesuai model aplikasi web dan bukan batasan yang bisa ditutup di
+  level runtime.
+- **Regression test**: `tests/offline/offline.test.js` — 5 test:
+  pesan sampai ke tab lain; tab tidak menerima broadcastnya sendiri;
+  kelas tetap bisa dibuat tanpa dukungan `BroadcastChannel`; enqueue dan
+  remove menyiarkan perubahan; `onRemoteChange` terpanggil; sambungan
+  bisa dilepas dan method antrean kembali ke bentuk semula.
+- **Status**: Fixed
+
+---
+
+## BNG-048 — Siklus modul menyebabkan stack overflow; dynamic `import()` tidak tersedia
+
+- **Tanggal**: 2026-11-11
+- **Komponen**: `compiler/bundler.js`, `compiler/compiler.js`,
+  `compiler/codegen/generator.js`, `compiler/parser/parser.js`
+- **Severity**: High
+- **Deskripsi**: Dua masalah yang saling terkait.
+  1. Dua modul yang saling mengimpor (A → B → A) membuat `bonang build`
+     gagal dengan `RangeError: Maximum call stack size exceeded`. Hal yang
+     sama terjadi saat menjalankan program langsung dari sumber.
+  2. `import("./x.bng")` gagal diparse dengan
+     `Ekspresi tidak terduga: 'import'` — pola lazy-loading tidak tersedia.
+- **Root cause**:
+  1. `collectModules()` melakukan traversal naif: `visit` → baca dependensi
+     → `visit` lagi. Modul yang sudah dibaca tetapi belum selesai diproses
+     tidak ditandai, sehingga siklus tidak pernah berhenti. `createRequire()`
+     juga evaluates modul berulang kali tanpa cache bersama.
+  2. Parser hanya mengenali `import` sebagai deklarasi di posisi statement;
+     tidak ada node AST untuk ekspresi `import()`.
+  3. Codegen menulis import sebagai
+     `const { a } = require("...")` (destructuring). Destructuring mengunci
+     nilai **saat import**, sehingga modul yang berada di tengah siklus —
+     yang exports-nya masih kosong — akan mengikat `undefined` selamanya.
+- **Perbaikan**:
+  - `collectModules()` mendaftarkan modul ke peta **sebelum** membaca
+    dependensinya, dan melacak `stack` untuk mengenali siklus.
+  - `createRequire(fromFile, sharedCache)` memakai cache modul bersama dan
+    mendaftarkan modul **sebelum** body-nya dievaluasi — sehingga siklus
+    menghasilkan `module.exports` yang masih kosong, persis seperti
+    CommonJS di Node.
+  - Codegen memakai **live binding**: import menjadi
+    `const _$$modN = require("...")` dan setiap pemakaian nama diimpor
+    menjadi `_$$modN.nama`. Nilai dibaca dari `module.exports` setiap kali
+    dipakai, bukan dikunci saat import.
+  - `export { x }` di mana `x` berasal dari import mengekspor nilai dari
+    modul asal (`mod.nama`), bukan binding lokal yang belum terisi.
+  - Parser menambah node `ImportExpression`; `import("...")` dibedakan dari
+    deklarasi `import` lewat token berikutnya.
+  - Codegen menambah helper `_$$dynamicImport` yang mengembalikan Promise
+    berisi namespace modul. Path harus string literal, karena path yang
+    dihitung saat runtime tidak bisa ditemukan saat build.
+  - Bundler mengoleksi `ImportExpression` di seluruh AST, memuat modulnya
+    ke bundel, dan menulis ulang panggilan menjadi
+    `Promise.resolve(__bngRequire("id"))`.
+- **Catatan**: `import()` dengan path non-literal ditolak saat kompilasi
+  (dicatat sebagai L-34). Module Node bawaan lewat `import()` di bundel
+  client ditolak saat build, bukan diam-diam gagal saat runtime.
+- **Regression test**: `tests/tools/module-graph.test.js` — 10 test:
+  siklus dua file (bundle & sumber); siklus tiga modul; live binding
+  pada siklus; re-export dari modul lain; `import()` diparse; `import()`
+  memuat modul saat runtime; `import()` ter-bundle; `import()` menolak path
+  non-literal; `import()` menolak modul Node di bundel client.
+- **Status**: Fixed
+
+---
+
 ## Ringkasan
 
 | ID | Komponen | Severity | Status |
@@ -826,8 +1213,17 @@ Status: `Fixed` (perbaikan diterapkan dan ada regression test), `Open`
 | BNG-037 | CLI scaffold | Medium | Fixed |
 | BNG-038 | Test tooling | Medium | Fixed |
 | BNG-039 | Bundler | Critical | Fixed |
+| BNG-040 | HTTP server | High | Fixed |
+| BNG-041 | Query builder + Auditor | High | Fixed |
+| BNG-042 | Client runtime | Medium | Fixed |
+| BNG-043 | Service worker cache | Medium | Fixed |
+| BNG-044 | Security + HTTP server | Medium | Fixed |
+| BNG-045 | Query builder | Medium | Fixed |
+| BNG-046 | Client runtime | Medium | Fixed |
+| BNG-047 | Client runtime | Medium | Fixed |
+| BNG-048 | Bundler + Compiler + Codegen + Parser | High | Fixed |
 
-**Total: 39 bug tercatat, 39 Fixed, 0 Open.**
+**Total: 48 bug tercatat, 48 Fixed, 0 Open.**
 
 Siklus yang dipakai setiap kali bug ditemukan:
 

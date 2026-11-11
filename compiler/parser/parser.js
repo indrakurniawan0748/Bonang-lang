@@ -181,6 +181,14 @@ class Parser {
                 case 'namespace':
                     return this.parseNamespaceDeclaration();
                 case 'import':
+                    // `import("...")` adalah ekspresi dynamic import, bukan
+                    // deklarasi import. Keduanya berbagi keyword yang sama,
+                    // jadi dibedakan lewat token berikutnya.
+                    if (this.peek(1).type === 'operator' && this.peek(1).value === '(') {
+                        const expression = this.parseExpression();
+                        this.match('operator', ';');
+                        return new A.ExpressionStatement(expression, tok.start.line, tok.start.column);
+                    }
                     return this.parseImportDeclaration();
                 case 'export':
                     return this.parseExportDeclaration();
@@ -1100,6 +1108,18 @@ class Parser {
                 // Keyword lain (mis. `class`, `enum`, `get`) boleh dipakai
                 // sebagai identifier di posisi ekspresi, selama keyword itu
                 // tidak punya makna khusus di sana.
+                // `import("...")` — pemuatan modul saat runtime. Berbeda
+                // dari deklarasi `import`, yang hanya boleh muncul di
+                // posisi statement.
+                if (tok.value === 'import' && this.peek(1).type === 'operator'
+                    && this.peek(1).value === '(') {
+                    this.next();
+                    this.next();
+                    const source = this.parseExpression();
+                    this.expect('operator', ')');
+                    return new A.ImportExpression(source, tok.start.line, tok.start.column);
+                }
+
                 if (!EXPRESSION_BLOCKED_KEYWORDS.has(tok.value)) {
                     this.next();
                     return new A.Identifier(tok.value, tok.start.line, tok.start.column);

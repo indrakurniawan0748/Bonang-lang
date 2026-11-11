@@ -14,17 +14,17 @@ Laporan hasil pengujian. Semua angka berasal dari eksekusi nyata pada
 ```
 $ npm test
 
-ℹ tests 257
+ℹ tests 356
 ℹ suites 0
-ℹ pass 257
+ℹ pass 356
 ℹ fail 0
 ℹ cancelled 0
 ℹ skipped 0
 ℹ todo 0
-ℹ duration_ms 3354.1362
+ℹ duration_ms 3647.308
 ```
 
-**257 test, 257 lulus, 0 gagal, 0 dilewati, 0 dinonaktifkan.**
+**356 test, 356 lulus, 0 gagal, 0 dilewati, 0 dinonaktifkan.**
 
 ---
 
@@ -33,14 +33,14 @@ $ npm test
 | Suite | Tests | Pass | Fail | Cakupan |
 | --- | --- | --- | --- | --- |
 | `tests/unit/` | 96 | 96 | 0 | Lexer, parser, codegen |
-| `tests/integration/` | 46 | 46 | 0 | Runtime, aplikasi CRUD |
+| `tests/integration/` | 47 | 47 | 0 | Runtime, aplikasi CRUD |
 | `tests/regression/` | 16 | 16 | 0 | Bug BNG-010..BNG-030 terkunci |
-| `tests/offline/` | 13 | 13 | 0 | IndexedDB, sync queue, konflik |
+| `tests/offline/` | 28 | 28 | 0 | IndexedDB, sync queue, konflik, batas antrean |
 | `tests/concurrency/` | 8 | 8 | 0 | 10/100/500/1000 request, p50/p95/p99 |
-| `tests/database/` | 19 | 19 | 0 | Pool, transaksi, query builder, JOIN, injection |
-| `tests/security/` | 35 | 35 | 0 | Hash, CSRF, XSS, path, rate limit, session |
-| `tests/tools/` | 24 | 24 | 0 | Akurasi auditor, scaffold CLI, bundel browser |
-| **Total** | **257** | **257** | **0** | |
+| `tests/database/` | 47 | 47 | 0 | Pool, transaksi, query builder, JOIN, injection, raw SQL, soft delete |
+| `tests/security/` | 55 | 55 | 0 | Hash, CSRF, XSS, path, rate limit, session, header keamanan |
+| `tests/tools/` | 59 | 59 | 0 | Akurasi auditor, scaffold CLI, bundel browser, cache SW, graf modul, audit struktur |
+| **Total** | **356** | **356** | **0** | |
 
 Perintah verifikasi per suite:
 
@@ -91,7 +91,9 @@ Throughput dihitung dari mean: `1000 / mean(detik)`.
 
 ## 4. Pengujian Database
 
-`tests/database/database.test.js` — 19 test.
+`tests/database/database.test.js` — 32 test.
+
+Ditambah `tests/database/soft-delete.test.js` — 15 test (lihat §4.2).
 
 | Area | Test | Hasil |
 | --- | --- | --- |
@@ -114,6 +116,19 @@ Throughput dihitung dari mean: `1000 / mean(detik)`.
 | QueryBuilder | `join` menghasilkan SQL berparameter yang benar | Pass |
 | QueryBuilder | Jenis JOIN & kondisi JOIN berbahaya ditolak | Pass |
 | Integritas | Kolom NOT NULL menolak nilai kosong | Pass |
+| Raw SQL | `whereRaw` menolak statement tambahan (pemisah `;`) | Pass |
+| Raw SQL | `whereRaw` menolak jumlah placeholder ≠ jumlah parameter | Pass |
+| Raw SQL | `having` menolak jumlah placeholder ≠ jumlah parameter | Pass |
+| Raw SQL | `whereRaw` dengan placeholder yang cocok diterima | Pass |
+| Raw SQL | Titik koma di dalam literal string bukan pemisah statement | Pass |
+| Raw SQL | SQL mentah kosong ditolak | Pass |
+| Keyset | Halaman pertama tanpa cursor | Pass |
+| Keyset | Semua baris terkirim tepat satu kali (dicek dengan `Set`) | Pass |
+| Keyset | Baris dengan nilai kolom pengurutan yang sama tidak terlewat | Pass |
+| Keyset | Halaman terakhir tidak punya cursor berikutnya | Pass |
+| Keyset | Arah `DESC` | Pass |
+| Keyset | Nama kolom berbahaya ditolak | Pass |
+| Keyset | Cursor berisi payload injeksi diperlakukan sebagai data | Pass |
 
 ### 4.1 Bukti injeksi SQL
 
@@ -123,11 +138,43 @@ SELECT * FROM items WHERE name = ?   →  0 baris
 SELECT * FROM items                 →  1 baris (tabel utuh)
 ```
 
+### 4.2 Pengujian Soft Delete
+
+`tests/database/soft-delete.test.js` — 15 test. Semua test memakai file
+SQLite sungguhan di folder sementara (`node:sqlite`), bukan mock.
+
+| Area | Test | Hasil |
+| --- | --- | --- |
+| Kolom | `ensureSoftDeleteColumn()` menambahkan `deleted_at` bila belum ada | Pass |
+| Kolom | Kolom yang sudah ada tidak diubah (idempoten) | Pass |
+| Kolom | Nama kolom kustom (`archived_at`) dihormati | Pass |
+| Hapus | `remove()` menandai baris, tidak menghapus | Pass |
+| Hapus | `remove()` pada baris yang sudah terhapus tidak mengubah apa pun | Pass |
+| Baca | `findAll()` menyembunyikan baris terhapus | Pass |
+| Baca | `findById()` baris terhapus → `null` | Pass |
+| Baca | `findAll({ includeDeleted: true })` menampilkan baris terhapus | Pass |
+| Hitung | Baris aktif dan terhapus dihitung terpisah | Pass |
+| Pulihkan | `restore()` mengembalikan baris ke daftar aktif | Pass |
+| Pulihkan | `purge()` menghapus baris secara permanen | Pass |
+| Pulihkan | `purgeAll()` menghapus semua baris terhapus | Pass |
+| Validasi | Nama tabel berbahaya ditolak | Pass |
+| Validasi | Nama kolom penanda berbahaya ditolak | Pass |
+| Validasi | Pool yang tidak valid ditolak | Pass |
+
+Bukti langsung terhadap database (bukan lewat repository):
+
+```
+$ node --test "tests/database/soft-delete.test.js"
+ℹ tests 15
+ℹ pass 15
+ℹ fail 0
+```
+
 ---
 
 ## 5. Pengujian Keamanan
 
-`tests/security/security.test.js` — 35 test.
+`tests/security/security.test.js` — 55 test.
 
 | Area | Cakupan |
 | --- | --- |
@@ -143,12 +190,32 @@ SELECT * FROM items                 →  1 baris (tabel utuh)
 | Upload | File diizinkan diterima; nama berkarakter path, oversize, dan tipe terlarang ditolak |
 | Rate limiter | Batas per jendela; kuota terpisah per kunci; kuota terisi ulang setelah jendela |
 | Session | create/get/update/destroy; sesi tak dikenal → null; sesi kedaluwarsa dibuang; id sesi tidak memuat data sensitif |
+| Header keamanan | Respons JSON membawa header bawaan (`nosniff`, `X-Frame-Options`, CSP, Referrer-Policy, Permissions-Policy) | Pass |
+| Header keamanan | CSP melarang skrip & objek luar origin (`script-src 'self'`, `object-src 'none'`, tanpa `unsafe-inline`/`unsafe-eval`) | Pass |
+| Header keamanan | Respons 404 juga membawa header | Pass |
+| Header keamanan | Aset statis juga membawa header | Pass |
+| Header keamanan | Aplikasi dapat menimpa sebagian header lewat `createServer({ securityHeaders })` | Pass |
+| Header keamanan | Aplikasi dapat menonaktifkan satu header (nilai `false` → header dihapus) | Pass |
+| Header keamanan | `securityHeaders: false` menonaktifkan seluruh header | Pass |
+| Header keamanan | Handler dapat menimpa header per-route | Pass |
+| Header keamanan | `resolveSecurityHeaders` menolak tipe opsi yang salah | Pass |
+| Signed cookie | `signValue` menghasilkan `<nilai>.<signature>` | Pass |
+| Signed cookie | Verifikasi berhasil saat signature cocok | Pass |
+| Signed cookie | Secret yang salah ditolak | Pass |
+| Signed cookie | Nilai yang dimanipulasi ditolak | Pass |
+| Signed cookie | Input rusak ditolak (bukan string, kosong, tanpa pemisah) | Pass |
+| Signed cookie | Nilai yang mengandung titik tidak salah dipecah | Pass |
+| Signed cookie | `response.signedCookie()` mengirim cookie bertanda tangan | Pass |
+| Signed cookie | `request.signedCookie()` membaca cookie valid | Pass |
+| Signed cookie | `request.signedCookie()` menolak cookie yang dipalsukan | Pass |
+| Signed cookie | `request.signedCookie()` mengembalikan null untuk cookie yang tidak ada | Pass |
+| Signed cookie | Signed cookie tanpa secret ditolak | Pass |
 
 ---
 
 ## 6. Pengujian Offline
 
-`tests/offline/offline.test.js` — 13 test, memakai `FakeIndexedDB` yang
+`tests/offline/offline.test.js` — 28 test, memakai `FakeIndexedDB` yang
 meniru API IndexedDB asli.
 
 | Area | Hasil |
@@ -161,12 +228,26 @@ meniru API IndexedDB asli.
 | `reconcile` — entitas baru, entri identik, konflik tercatat | Pass |
 | `ConnectionStatus` — subscribe/unsubscribe, setOnline | Pass |
 | `apiFetch` — jalur offline mengembalikan `{ ok:false, offline:true }` tanpa melempar | Pass |
+| Batas antrean — entri baru ditolak saat antrean penuh (`QueueOverflowError`) | Pass |
+| Batas antrean — entri dengan id sama menimpa tanpa menambah jumlah antrean | Pass |
+| Batas antrean — batas berlaku pada entri yang sebelumnya tersimpan | Pass |
+| Batas antrean — nilai batas bawaan ada dan wajar (500) | Pass |
+| Batas antrean — antrean menerima entri baru lagi setelah entri dihapus | Pass |
+| Background sync — tag terdaftar di service worker | Pass |
+| Background sync — browser tanpa dukungan dilaporkan `supported: false` tanpa melempar | Pass |
+| Background sync — kegagalan pendaftaran dilaporkan lewat `error` | Pass |
+| Antar-tab — pesan sampai ke tab lain | Pass |
+| Antar-tab — tab tidak menerima broadcastnya sendiri | Pass |
+| Antar-tab — kelas tetap bisa dibuat tanpa dukungan `BroadcastChannel` | Pass |
+| Antar-tab — `enqueue` dan `remove` menyiarkan perubahan antrean | Pass |
+| Antar-tab — `onRemoteChange` terpanggil untuk tab lain | Pass |
+| Antar-tab — sambungan bisa dilepas dan method antrean dikembalikan | Pass |
 
 ---
 
 ## 7. Pengujian Integrasi & CRUD
 
-`tests/integration/crud-demo.test.js` — aplikasi Bonang CRUD Demo
+`tests/integration/crud-demo.test.js` — 12 test; aplikasi Bonang CRUD Demo
 dijalankan sungguhan di atas HTTP.
 
 | Skenario | Hasil |
@@ -184,6 +265,10 @@ dijalankan sungguhan di atas HTTP.
 | PUT dengan `baseVersion` basi | 409, `details.server` berisi data server |
 | DELETE produk | 200/204 |
 | DELETE produk tak ada | 404 |
+| DELETE produk (soft delete) | 200, baris tetap ada di tabel dengan `deleted_at` terisi |
+| GET produk setelah soft delete | 404 |
+| POST `/api/products/:id/restore` | 200, `deletedAt` kembali `null` |
+| POST restore pada produk aktif | 409 |
 | `/api/products/summary` | 200, agregasi benar |
 | POST `/api/sync` | 200, applied + failed dihitung |
 | Aset statis (`/`, `style.css`, `client.js`, `sw.js`) | 200, content-type benar |
@@ -206,7 +291,7 @@ export list), BNG-015 (reserved word sebagai properti), BNG-016 (import
 
 ## 9. Pengujian Tooling (Auditor)
 
-`tests/tools/auditor.test.js` — 11 test mengunci akurasi `bonang audit`.
+`tests/tools/auditor.test.js` — 16 test mengunci akurasi `bonang audit`.
 `tests/tools/cli.test.js` — 6 test mengunci perilaku CLI pada proyek hasil
 `bonang init`.
 
@@ -223,9 +308,16 @@ export list), BNG-015 (reserved word sebagai properti), BNG-016 (import
 | `innerHTML` tanpa escaping | Aturan lama masih bekerja |
 | Path traversal | Aturan lama masih bekerja |
 | Secret hardcoded | Aturan lama masih bekerja |
+| `whereRaw` dengan data user | Dilaporkan `sql-injection-raw` (critical) |
+| `having` dengan data user | Dilaporkan `sql-injection-raw` (critical) |
+| `whereRaw` dengan placeholder & konstanta | Tidak dilaporkan |
+| `whereRaw` dengan operator `+` dan data user | Dilaporkan `sql-injection-raw` |
+| `whereRaw` tanpa data user | Tidak dilaporkan |
 
 Suite ini dibuat karena bug BNG-031..BNG-035: auditor melaporkan 19 temuan
-palsu pada kode referensi proyek sendiri sebelum diperbaiki.
+palsu pada kode referensi proyek sendiri sebelum diperbaiki. Lima test
+terakhir ditambahkan untuk BNG-041 (L-18): sebelumnya `whereRaw`/`having`
+tidak pernah dianalisis sama sekali.
 
 ---
 
@@ -263,7 +355,81 @@ console.
 
 ---
 
-## 10. Uji CLI
+## 9.2 Pengujian Invalidasi Cache Service Worker
+
+`tests/tools/sw-cache.test.js` — 8 test. Suite ini memakai tiruan
+`CacheStorage`, `crypto.subtle`, `Headers`, dan `Response` yang dipasang
+di `globalThis`, sehingga jalur kode yang diuji sama persis dengan yang
+berjalan di browser (bukan implementasi tiruan terpisah).
+
+| Kasus | Yang dibuktikan |
+| --- | --- |
+| Hash teks | Deterministik; isi berbeda → hash berbeda; dipotong 16 hex |
+| `cacheKey` | URL absolut & relatif → `pathname` |
+| `prune` | Hanya file yang hash-nya berubah yang dihapus; file lain tetap tersimpan |
+| `matchFresh` | Entri basi → `null` dan dihapus; entri segar dilayani |
+| `store` | Header `X-Bonang-Cache-Hash` dipasang dari manifest; body utuh |
+| `loadManifest(true)` | Manifest diambil ulang dari jaringan saat dipaksa |
+| Manifest gagal dimuat | Manifest lama dipertahankan, tidak ditimpa |
+| File di luar manifest | Tidak ikut terhapus |
+
+Suite ini dibuat untuk BNG-043 (L-20). Sebelumnya service worker memakai
+satu nama cache ber-versi: tiap deploy memaksa **seluruh** aset diunduh
+ulang, dan aset yang tidak berubah ikut terbuang.
+
+Verifikasi langsung di browser sungguhan (Chrome 157, DevTools Protocol) —
+bukan simulasi:
+
+```
+$ node dist/server.js
+$ chrome --remote-debugging-port=9222 http://127.0.0.1:3000/
+
+BEFORE hash style.css: 22604cbc22b908ea
+BEFORE hash client.js: 633967ecff36c8cc
+AFTER  hash style.css: 363d59d6b55dd405   <- berubah, entri di-refresh
+AFTER  hash client.js: 633967ecff36c8cc   <- tetap, cache dipertahankan
+```
+
+Hanya `style.css` yang berubah pada deploy; `client.js` tetap dilayani
+dari cache tanpa unduhan ulang. File CSS asli dikembalikan setelah
+pengujian.
+
+---
+
+## 9.3 Pengujian Graf Modul (Siklus & Dynamic Import)
+
+`tests/tools/module-graph.test.js` — 10 test. Setiap test membuat proyek
+Bonang sungguhan di folder sementara, lalu **menjalankan** hasilnya lewat
+Node — bukan hanya memeriksa bentuk string.
+
+| Kasus | Yang dibuktikan |
+| --- | --- |
+| Siklus dua file (A ⇄ B), bundle | Build selesai (3 modul), hasil `a->BA` — tanpa stack overflow |
+| Siklus dua file (A ⇄ B), dari sumber | Program berjalan langsung dari `.bng` tanpa error |
+| Siklus tiga modul (A → B → C → A) | Build selesai (4 modul), hasil `BCA` |
+| Live binding pada siklus | Nilai modul siklik dibaca saat call time — `bump()` thrice menghasilkan `3`, bukan `undefined` |
+| Re-export dari modul lain | `export { greet }` di mana `greet` berasal dari import mengekspor nilai yang benar (`hai`) |
+| `import()` diparse | Menghasilkan `ImportExpression` + helper `_$$dynamicImport` |
+| `import()` memuat modul saat runtime | Modul dimuat dan fungsinya bisa dipanggil |
+| `import()` ter-bundle | Modul ikut masuk bundel (2 modul), hasil `halo-bundel` |
+| `import()` path non-literal | Ditolak saat kompilasi — path harus deterministik |
+| `import("node:fs")` di bundel client | Ditolak **saat build**, bukan diam-diam gagal di browser |
+
+Suite ini dibuat untuk BNG-048 (L-05). Sebelumnya dua modul yang saling
+mengimpor membuat `bonang build` gagal dengan
+`RangeError: Maximum call stack size exceeded`, dan `import("./x.bng")`
+gagal diparse sama sekali.
+
+Verifikasi manual di luar test — siklus modul yang dibundle:
+
+```
+$ node -e "bundle({entry: 'main.bng', output: 'dist.js', target: 'server'})"
+modules 3
+$ node dist.js
+a->BA
+```
+
+---
 
 Sebagian perintah CLI diuji manual dengan output nyata:
 
@@ -307,9 +473,42 @@ missing field-> 400 {"status":"error","msg":"Field 'message' wajib diisi",
 
 ---
 
+## 9.4 Pengujian Audit Struktur
+
+`tests/tools/structure-audit.test.js` — 12 test. Memeriksa struktur basis
+kode: siklus dependensi, dead code, duplikasi, dan ukuran berkas.
+
+| Kasus | Yang dibuktikan |
+| --- | --- |
+| Siklus dependensi | Basis kode Bonang sendiri: 0 siklus |
+| Dead code | 0 kandidat tak dikenal |
+| Duplikat | 0 berkas identik (hash SHA-1) |
+| Cakupan pindai | ≥ 25 berkas JS terpindai |
+| Berkas besar | Semua yang terdaftar > 400 baris, urut menurun |
+| Modul dinamis | `runtime/client/client.js` & `sw-cache.js` bukan dead code |
+| Pool | Pengguna pool tercatat |
+| Cetak laporan | `printStructureReport()` tidak melempar |
+| Sumber kebenaran identifier | Query builder & soft delete memakai `assertIdentifier` yang sama |
+| Identifier berbahaya | `products; DROP TABLE x`, `products--`, `1products`, `""`, `a b` ditolak |
+| Path traversal sebagai identifier | `../etc/passwd`, `a/b`, `a\b`, `a.b` ditolak |
+| Lokasi berkas | `cli/structure-audit.js` ada di path yang benar |
+
+Audit struktur ini dibuat sebagai bagian PHASE 10 — kode yang tidak bisa
+dilihat auditor keamanan: bentuk modul, bukan isinya.
+
+```
+$ node cli/cli.js audit --structure
+Berkas JS dipindai: 29
+Siklus dependensi: 0
+Kandidat dead code: 0
+Duplikat identik: 0
+```
+
+---
+
 ## 11. Metodologi dan Batasan
 
-1. **Tidak ada test yang dinonaktifkan.** Semua 257 test aktif dan dijalankan.
+1. **Tidak ada test yang dinonaktifkan.** Semua 356 test aktif dan dijalankan.
 2. **Tidak ada mock untuk jalur produksi.** Test integrasi menjalankan server
    HTTP sungguhan dengan database SQLite sungguhan.
 3. **Test offline memakai `FakeIndexedDB`**, bukan IndexedDB browser —
@@ -320,6 +519,21 @@ missing field-> 400 {"status":"error","msg":"Field 'message' wajib diisi",
    lihat `benchmarks/RESULTS.md` untuk catatan metodologi.
 6. **Uji beban dibatasi oleh backlog OS Windows.** 1000 koneksi TCP
    simultan ditolak OS; harness memakai agent keep-alive (lihat BNG-028).
+7. **Uji header keamanan memakai respons HTTP sungguhan**, bukan pemeriksaan
+   teks pada kode — header dibaca dari respons yang benar-benar diterima.
+8. **Uji invalidasi cache punya dua lapis**: unit test dengan tiruan
+   Cache API, dan verifikasi di Chrome sungguhan lewat DevTools Protocol.
+   Hasil Chrome yang dipublikasikan di atas adalah hasil run nyata.
+9. **Uji graf modul menjalankan hasil build sungguhan.** Proyek Bonang
+   dibuat di folder sementara, dibundle, lalu dijalankan lewat Node —
+   bukan hanya memeriksa bentuk string hasil kompilasi.
+10. **Uji soft delete memakai file SQLite sungguhan.** Tabel dibuat di
+    folder sementara, kolom `deleted_at` benar-benar ditambahkan lewat
+    `ALTER TABLE`, dan isi tabel diperiksa langsung lewat query SQL —
+    bukan lewat repository saja.
+11. **Uji audit struktur memindai kode sumber sungguhan.** Graf
+    dependensi dibangun dari `require()` yang benar-benar ada di berkas,
+    bukan dari daftar tebakan.
 
 ---
 

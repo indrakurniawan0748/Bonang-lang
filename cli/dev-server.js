@@ -39,7 +39,8 @@ class DevServer {
             ctx.response.raw.writeHead(200, {
                 'Content-Type': 'text/event-stream',
                 'Cache-Control': 'no-cache',
-                Connection: 'keep-alive'
+                Connection: 'keep-alive',
+                'X-Content-Type-Options': 'nosniff'
             });
             ctx.response.raw.write(': connected\n\n');
             ctx.response.finished = true;
@@ -162,7 +163,8 @@ class DevServer {
             ctx.response.raw.writeHead(200, {
                 'Content-Type': 'text/event-stream',
                 'Cache-Control': 'no-cache',
-                Connection: 'keep-alive'
+                Connection: 'keep-alive',
+                'X-Content-Type-Options': 'nosniff'
             });
             ctx.response.raw.write(': connected\n\n');
             ctx.response.finished = true;

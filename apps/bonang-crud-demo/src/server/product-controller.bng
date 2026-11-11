@@ -20,6 +20,7 @@ export class ProductController {
         router.post("/api/products", (ctx) => this.store(ctx));
         router.put("/api/products/:id", (ctx) => this.update(ctx));
         router.delete("/api/products/:id", (ctx) => this.destroy(ctx));
+        router.post("/api/products/:id/restore", (ctx) => this.restore(ctx));
 
         // Endpoint sinkronisasi untuk client offline.
         router.post("/api/sync", (ctx) => this.sync(ctx));
@@ -89,11 +90,23 @@ export class ProductController {
 
     /**
      * DELETE /api/products/:id
+     *
+     * Soft delete: produk ditandai terhapus, barisnya tetap ada di tabel
+     * dan bisa dipulihkan lewat `POST /api/products/:id/restore`.
      */
     async destroy(ctx) {
         const id = this.parseId(ctx.params.id);
         await this.service.remove(id);
         return { status: "success", data: { id } };
+    }
+
+    /**
+     * POST /api/products/:id/restore
+     */
+    async restore(ctx) {
+        const id = this.parseId(ctx.params.id);
+        const product = await this.service.restore(id);
+        return { status: "success", data: product };
     }
 
     /**

@@ -120,6 +120,9 @@ async function saveUpload(root, uploadDir, filename, buffer) {
 
 /**
  * Stream file ke response HTTP tanpa memuat seluruh isi ke memori.
+ *
+ * Header keamanan ikut dipasang di sini karena berkas statis ditulis
+ * langsung ke `response.raw` — tidak melewati `Response.buildHeaders()`.
  */
 function streamFile(root, relativePath, response) {
     const target = safeJoin(root, relativePath);
@@ -130,10 +133,16 @@ function streamFile(root, relativePath, response) {
         return false;
     }
     const stat = fs.statSync(target);
-    response.raw.writeHead(200, {
+    const headers = {
         'Content-Type': contentTypeFor(target),
         'Content-Length': stat.size
-    });
+    };
+    if (response.securityHeaders) {
+        for (const [name, value] of Object.entries(response.securityHeaders)) {
+            if (headers[name] === undefined) headers[name] = value;
+        }
+    }
+    response.raw.writeHead(200, headers);
     const stream = fs.createReadStream(target);
     stream.pipe(response.raw);
     response.finished = true;

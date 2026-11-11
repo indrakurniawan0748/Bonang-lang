@@ -13,6 +13,8 @@ const {
     uuid,
     sign,
     verifySignature,
+    signValue,
+    verifySignedValue,
     createCsrfToken,
     verifyCsrfToken,
     escapeHtml,
@@ -325,4 +327,335 @@ test('security: id sesi tidak memuat data sensitif', () => {
     assert.ok(!id.includes('rahasia'));
     assert.ok(!id.includes('jwt-isi'));
     assert.ok(id.length >= 32, 'id sesi harus cukup panjang untuk acak');
+});
+
+// ===== HEADER KEAMANAN HTTP =====
+
+test('security: respons JSON membawa header keamanan bawaan', async () => {
+    const { Server } = require('../../runtime/http/server');
+    const server = new Server({ port: 0, host: '127.0.0.1' });
+    server.router.get('/api/tes', () => ({ ok: true }));
+
+    await server.listen();
+    const port = server.address().port;
+
+    try {
+        const res = await fetch(`http://127.0.0.1:${port}/api/tes`);
+        await res.json();
+
+        assert.strictEqual(res.headers.get('x-content-type-options'), 'nosniff');
+        assert.strictEqual(res.headers.get('x-frame-options'), 'SAMEORIGIN');
+        assert.strictEqual(res.headers.get('referrer-policy'), 'strict-origin-when-cross-origin');
+        assert.ok(res.headers.get('content-security-policy'), 'CSP harus ada');
+        assert.ok(res.headers.get('content-security-policy').includes("default-src 'self'"));
+    } finally {
+        await server.close();
+    }
+});
+
+test('security: CSP melarang skrip dan objek dari luar origin', async () => {
+    const { Server } = require('../../runtime/http/server');
+    const server = new Server({ port: 0, host: '127.0.0.1' });
+    server.router.get('/api/tes', () => ({ ok: true }));
+
+    await server.listen();
+    const port = server.address().port;
+
+    try {
+        const res = await fetch(`http://127.0.0.1:${port}/api/tes`);
+        const csp = res.headers.get('content-security-policy');
+
+        assert.ok(csp.includes("script-src 'self'"), 'skrip hanya dari self');
+        assert.ok(csp.includes("object-src 'none'"), 'objek dilarang');
+        assert.ok(csp.includes("frame-ancestors 'self'"), 'frame-ancestors harus ada');
+        assert.ok(!csp.includes('unsafe-inline'), 'tidak boleh ada unsafe-inline');
+        assert.ok(!csp.includes('unsafe-eval'), 'tidak boleh ada unsafe-eval');
+    } finally {
+        await server.close();
+    }
+});
+
+test('security: header keamanan juga ada pada respons error 404', async () => {
+    const { Server } = require('../../runtime/http/server');
+    const server = new Server({ port: 0, host: '127.0.0.1' });
+
+    await server.listen();
+    const port = server.address().port;
+
+    try {
+        const res = await fetch(`http://127.0.0.1:${port}/tidak-ada`);
+        await res.json();
+
+        assert.strictEqual(res.status, 404);
+        assert.strictEqual(res.headers.get('x-content-type-options'), 'nosniff');
+        assert.ok(res.headers.get('content-security-policy'), 'CSP harus ada pada respons error');
+    } finally {
+        await server.close();
+    }
+});
+
+test('security: aset statis juga membawa header keamanan', async () => {
+    const fs = require('node:fs');
+    const os = require('node:os');
+    const path = require('node:path');
+    const { Server } = require('../../runtime/http/server');
+
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bonang-static-'));
+    fs.writeFileSync(path.join(root, 'index.html'), '<h1>halo</h1>', 'utf8');
+
+    const server = new Server({ port: 0, host: '127.0.0.1', staticDir: root });
+
+    await server.listen();
+    const port = server.address().port;
+
+    try {
+        const res = await fetch(`http://127.0.0.1:${port}/index.html`);
+        await res.text();
+
+        assert.strictEqual(res.status, 200);
+        assert.strictEqual(res.headers.get('x-content-type-options'), 'nosniff');
+        assert.ok(res.headers.get('content-security-policy'), 'CSP harus ada pada aset statis');
+    } finally {
+        await server.close();
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test('security: aplikasi bisa menimpa header keamanan bawaan', async () => {
+    const { Server } = require('../../runtime/http/server');
+    const server = new Server({
+        port: 0,
+        host: '127.0.0.1',
+        securityHeaders: { 'content-security-policy': "default-src 'none'" }
+    });
+    server.router.get('/api/tes', () => ({ ok: true }));
+
+    await server.listen();
+    const port = server.address().port;
+
+    try {
+        const res = await fetch(`http://127.0.0.1:${port}/api/tes`);
+        await res.json();
+
+        assert.strictEqual(res.headers.get('content-security-policy'), "default-src 'none'");
+        assert.strictEqual(res.headers.get('x-frame-options'), 'SAMEORIGIN', 'header lain tetap bawaan');
+    } finally {
+        await server.close();
+    }
+});
+
+test('security: aplikasi bisa menonaktifkan satu header bawaan', async () => {
+    const { Server } = require('../../runtime/http/server');
+    const server = new Server({
+        port: 0,
+        host: '127.0.0.1',
+        securityHeaders: { 'x-frame-options': null }
+    });
+    server.router.get('/api/tes', () => ({ ok: true }));
+
+    await server.listen();
+    const port = server.address().port;
+
+    try {
+        const res = await fetch(`http://127.0.0.1:${port}/api/tes`);
+        await res.json();
+
+        assert.strictEqual(res.headers.get('x-frame-options'), null, 'header yang dinonaktifkan tidak dikirim');
+        assert.strictEqual(res.headers.get('x-content-type-options'), 'nosniff');
+    } finally {
+        await server.close();
+    }
+});
+
+test('security: securityHeaders false mematikan seluruh header keamanan', async () => {
+    const { Server } = require('../../runtime/http/server');
+    const server = new Server({ port: 0, host: '127.0.0.1', securityHeaders: false });
+    server.router.get('/api/tes', () => ({ ok: true }));
+
+    await server.listen();
+    const port = server.address().port;
+
+    try {
+        const res = await fetch(`http://127.0.0.1:${port}/api/tes`);
+        await res.json();
+
+        assert.strictEqual(res.headers.get('x-content-type-options'), null);
+        assert.strictEqual(res.headers.get('content-security-policy'), null);
+    } finally {
+        await server.close();
+    }
+});
+
+test('security: handler bisa menimpa header keamanan per-route', async () => {
+    const { Server } = require('../../runtime/http/server');
+    const server = new Server({ port: 0, host: '127.0.0.1' });
+    server.router.get('/api/embed', (ctx) => {
+        ctx.response.set('X-Frame-Options', 'ALLOWALL');
+        return { ok: true };
+    });
+
+    await server.listen();
+    const port = server.address().port;
+
+    try {
+        const res = await fetch(`http://127.0.0.1:${port}/api/embed`);
+        await res.json();
+
+        assert.strictEqual(res.headers.get('x-frame-options'), 'ALLOWALL', 'nilai aplikasi menang');
+    } finally {
+        await server.close();
+    }
+});
+
+test('security: resolveSecurityHeaders menolak tipe opsi yang salah', () => {
+    const { resolveSecurityHeaders } = require('../../runtime/http/server');
+
+    assert.throws(() => resolveSecurityHeaders('bogus'), TypeError);
+    assert.strictEqual(resolveSecurityHeaders(false), null);
+    assert.ok(resolveSecurityHeaders(undefined)['x-frame-options']);
+});
+
+// ===== SIGNED COOKIE =====
+
+test('security: signValue menghasilkan nilai bertanda tangan', () => {
+    const signed = signValue('pengguna-1', 'rahasia');
+
+    assert.ok(signed.startsWith('pengguna-1.'), 'nilai asli harus ada di depan');
+    assert.ok(signed.length > 'pengguna-1'.length, 'signature harus ditambahkan');
+});
+
+test('security: verifySignedValue mengembalikan nilai saat signature cocok', () => {
+    const signed = signValue('pengguna-1', 'rahasia');
+
+    assert.strictEqual(verifySignedValue(signed, 'rahasia'), 'pengguna-1');
+});
+
+test('security: verifySignedValue menolak secret yang salah', () => {
+    const signed = signValue('pengguna-1', 'rahasia');
+
+    assert.strictEqual(verifySignedValue(signed, 'rahasia-salah'), null);
+});
+
+test('security: verifySignedValue menolak nilai yang dimanipulasi', () => {
+    const signed = signValue('pengguna-1', 'rahasia');
+    const manipulated = signed.replace('pengguna-1', 'pengguna-2');
+
+    assert.strictEqual(verifySignedValue(manipulated, 'rahasia'), null,
+        'nilai yang diubah tidak boleh diterima');
+});
+
+test('security: verifySignedValue menolak input rusak', () => {
+    assert.strictEqual(verifySignedValue('tidak-bertanda', 'rahasia'), null);
+    assert.strictEqual(verifySignedValue('', 'rahasia'), null);
+    assert.strictEqual(verifySignedValue(null, 'rahasia'), null);
+    assert.strictEqual(verifySignedValue(undefined, 'rahasia'), null);
+    assert.strictEqual(verifySignedValue('a.b', ''), null, 'secret kosong harus ditolak');
+});
+
+test('security: verifySignedValue menangani nilai yang mengandung titik', () => {
+    const signed = signValue('a.b.c', 'rahasia');
+
+    assert.strictEqual(verifySignedValue(signed, 'rahasia'), 'a.b.c',
+        'pemisah terakhir harus dipakai, bukan yang pertama');
+});
+
+test('security: response.signedCookie mengirim cookie bertanda tangan', async () => {
+    const { Server } = require('../../runtime/http/server');
+    const server = new Server({ port: 0, host: '127.0.0.1' });
+    server.router.get('/api/set', (ctx) => {
+        ctx.response.signedCookie('token', 'abc123', { secret: 'rahasia', httpOnly: true });
+        return { ok: true };
+    });
+
+    await server.listen();
+    const port = server.address().port;
+
+    try {
+        const res = await fetch(`http://127.0.0.1:${port}/api/set`);
+        await res.json();
+
+        const setCookie = res.headers.get('set-cookie');
+        assert.ok(setCookie.includes('token='), 'cookie harus ada');
+        assert.ok(setCookie.includes('HttpOnly'), 'HttpOnly bawaan tetap berlaku');
+        assert.ok(
+            setCookie.includes(encodeURIComponent(signValue('abc123', 'rahasia'))),
+            'nilai cookie harus bertanda tangan'
+        );
+    } finally {
+        await server.close();
+    }
+});
+
+test('security: request.signedCookie membaca cookie yang valid', async () => {
+    const { Server } = require('../../runtime/http/server');
+    const server = new Server({ port: 0, host: '127.0.0.1' });
+    server.router.get('/api/read', (ctx) => ({
+        nilai: ctx.signedCookie('token', 'rahasia')
+    }));
+
+    await server.listen();
+    const port = server.address().port;
+
+    try {
+        const cookie = `token=${encodeURIComponent(signValue('abc123', 'rahasia'))}`;
+        const res = await fetch(`http://127.0.0.1:${port}/api/read`, {
+            headers: { cookie }
+        });
+        const data = await res.json();
+
+        assert.strictEqual(data.nilai, 'abc123');
+    } finally {
+        await server.close();
+    }
+});
+
+test('security: request.signedCookie menolak cookie yang dipalsukan', async () => {
+    const { Server } = require('../../runtime/http/server');
+    const server = new Server({ port: 0, host: '127.0.0.1' });
+    server.router.get('/api/read', (ctx) => ({
+        nilai: ctx.signedCookie('token', 'rahasia')
+    }));
+
+    await server.listen();
+    const port = server.address().port;
+
+    try {
+        const cookie = `token=${encodeURIComponent(signValue('abc123', 'secret-lain'))}`;
+        const res = await fetch(`http://127.0.0.1:${port}/api/read`, {
+            headers: { cookie }
+        });
+        const data = await res.json();
+
+        assert.strictEqual(data.nilai, null, 'cookie palsu harus ditolak');
+    } finally {
+        await server.close();
+    }
+});
+
+test('security: request.signedCookie mengembalikan null untuk cookie yang tidak ada', async () => {
+    const { Server } = require('../../runtime/http/server');
+    const server = new Server({ port: 0, host: '127.0.0.1' });
+    server.router.get('/api/read', (ctx) => ({
+        nilai: ctx.signedCookie('token', 'rahasia')
+    }));
+
+    await server.listen();
+    const port = server.address().port;
+
+    try {
+        const res = await fetch(`http://127.0.0.1:${port}/api/read`);
+        const data = await res.json();
+
+        assert.strictEqual(data.nilai, null);
+    } finally {
+        await server.close();
+    }
+});
+
+test('security: signed cookie tanpa secret ditolak', () => {
+    const { Response } = require('../../runtime/http/server');
+    const response = new Response({ writeHead() {}, end() {} });
+
+    assert.throws(() => response.signedCookie('token', 'abc'), /Secret wajib diisi/);
+    assert.throws(() => response.cookie('token', 'abc', { signed: true }), /Secret wajib diisi/);
 });

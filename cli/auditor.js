@@ -15,6 +15,14 @@ const MUTATING_METHODS = new Set(['post', 'put', 'patch', 'delete']);
 // Kata kunci SQL yang menandakan sebuah template literal berisi SQL.
 const SQL_KEYWORD_PATTERN = /\b(SELECT|INSERT|UPDATE|DELETE)\b/i;
 
+// Fragment SQL yang umum di dalam klausa WHERE/HAVING. Dipakai untuk
+// mengenali SQL mentah pada `whereRaw`/`having`, yang biasanya tidak
+// memuat kata kunci SELECT.
+const SQL_FRAGMENT_PATTERN = /\b(WHERE|HAVING|AND|OR|IS|LIKE|BETWEEN|IN|NOT)\b/i;
+
+// Metode query builder yang menerima SQL mentah.
+const RAW_SQL_METHODS = new Set(['whereRaw', 'having']);
+
 // Akar ekspresi yang dianggap berisi data dari request.
 const REQUEST_ROOT_PATTERN = /^(ctx|req|request|context)$/i;
 
@@ -278,7 +286,66 @@ class SecurityAuditor {
         const info = analyzeProgram(ast);
 
         issues.push(...this.checkSqlTemplates(ast, file, info));
+        issues.push(...this.checkRawSqlCalls(ast, file, info));
         issues.push(...this.checkRoutes(ast, file, info));
+
+        return issues;
+    }
+
+    /**
+     * Deteksi SQL mentah yang disisipkan ke query builder.
+     *
+     * `whereRaw`/`having` menerima SQL mentah — tidak bisa di-parameterkan
+     * seluruhnya. Yang tetap aman adalah bentuk yang memakai placeholder
+     * `?` dan mengirim nilainya sebagai parameter terpisah.
+     *
+     * Yang dilaporkan:
+     *  - SQL mentah yang dibangun dengan template literal berisi
+     *    interpolasi data user (injeksi langsung).
+     *  - SQL mentah yang digabungkan dengan operator `+` dan data user.
+     */
+    checkRawSqlCalls(ast, file, info) {
+        const issues = [];
+
+        walkScoped(ast, (node, scope) => {
+            if (!node || node.type !== 'CallExpression') return;
+            const name = callName(node);
+            if (!RAW_SQL_METHODS.has(name)) return;
+
+            const first = node.args[0];
+            if (!first) return;
+
+            // Bentuk 1: template literal dengan interpolasi tak aman.
+            // Nama metodenya sudah menjamin isinya SQL, jadi tidak perlu
+            // lagi dicocokkan dengan kata kunci SELECT/WHERE — fragmen
+            // seperti `name = ${x}` juga harus dilaporkan.
+            if (first.type === 'TemplateLiteral') {
+                const unsafe = first.expressions.filter(
+                    (expr) => !isSafeInterpolation(expr, scope, info)
+                );
+                if (unsafe.length === 0) return;
+
+                issues.push({
+                    file, line: node.line, column: node.column,
+                    severity: 'critical', rule: 'sql-injection-raw',
+                    message: `SQL mentah pada ${name}() memakai interpolasi data yang tidak dikontrol — berisiko SQL injection`,
+                    recommendation: 'Gunakan placeholder `?` dan kirim nilainya sebagai parameter terpisah'
+                });
+                return;
+            }
+
+            // Bentuk 2: penggabungan string dengan operator `+`.
+            if (first.type === 'BinaryExpression' && first.operator === '+') {
+                if (!containsUserSource(first, info.tainted)) return;
+
+                issues.push({
+                    file, line: node.line, column: node.column,
+                    severity: 'critical', rule: 'sql-injection-raw',
+                    message: `SQL mentah pada ${name}() digabungkan dengan data user — berisiko SQL injection`,
+                    recommendation: 'Gunakan placeholder `?` dan kirim nilainya sebagai parameter terpisah'
+                });
+            }
+        }, info);
 
         return issues;
     }
@@ -561,6 +628,21 @@ function isUserSource(node, tainted) {
     }
 
     return false;
+}
+
+/**
+ * Apakah subtree ini memuat data yang berasal dari request user?
+ */
+function containsUserSource(node, tainted) {
+    if (!node) return false;
+    let found = false;
+    walk(node, (n) => {
+        if (found) return;
+        if (n.type === 'Identifier' || n.type === 'MemberExpression') {
+            if (isUserSource(n, tainted)) found = true;
+        }
+    });
+    return found;
 }
 
 /**

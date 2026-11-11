@@ -146,6 +146,73 @@ test('CRUD Demo: membuat produk, membaca, mengubah, menghapus', async (t) => {
     assert.strictEqual(afterDelete.status, 404);
 });
 
+test('CRUD Demo: soft delete mempertahankan baris dan bisa dipulihkan', async (t) => {
+    const app = await startDemoServer();
+    t.after(() => app.cleanup());
+
+    // Buat dua produk.
+    const first = await fetch(`${app.base}/api/products`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'Madu Hutan', price: 55000, stock: 4 })
+    });
+    const created = (await first.json()).data;
+
+    await fetch(`${app.base}/api/products`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'Gula Aren', price: 32000, stock: 9 })
+    });
+
+    // Hapus produk pertama (soft delete).
+    const deleteResponse = await fetch(`${app.base}/api/products/${created.id}`, {
+        method: 'DELETE'
+    });
+    assert.strictEqual(deleteResponse.status, 200);
+
+    // Baris tidak lagi terlihat lewat API.
+    const afterDelete = await fetch(`${app.base}/api/products/${created.id}`);
+    assert.strictEqual(afterDelete.status, 404);
+
+    // Daftar produk tidak memuat produk yang dihapus.
+    const listResponse = await fetch(`${app.base}/api/products`);
+    const listBody = await listResponse.json();
+    assert.strictEqual(listBody.meta.total, 1);
+    assert.strictEqual(listBody.data[0].name, 'Gula Aren');
+
+    // Ringkasan juga tidak menghitung produk yang dihapus.
+    const summaryResponse = await fetch(`${app.base}/api/products/summary`);
+    const summaryBody = await summaryResponse.json();
+    assert.strictEqual(summaryBody.data.total, 1);
+
+    // Barisnya TIDAK hilang dari tabel — ini soft delete, bukan hard delete.
+    const rawRows = await app.app.repository.pool.query(
+        'SELECT * FROM products WHERE id = ?',
+        [created.id]
+    );
+    assert.strictEqual(rawRows.length, 1, 'baris harus tetap ada di tabel');
+    assert.ok(rawRows[0].deleted_at, 'deleted_at harus terisi');
+
+    // Pulihkan produknya.
+    const restoreResponse = await fetch(`${app.base}/api/products/${created.id}/restore`, {
+        method: 'POST'
+    });
+    assert.strictEqual(restoreResponse.status, 200);
+    const restored = (await restoreResponse.json()).data;
+    assert.strictEqual(restored.name, 'Madu Hutan');
+    assert.strictEqual(restored.deletedAt, null);
+
+    // Lagi bisa dibaca.
+    const afterRestore = await fetch(`${app.base}/api/products/${created.id}`);
+    assert.strictEqual(afterRestore.status, 200);
+
+    // Memulihkan produk yang tidak terhapus ditolak sebagai konflik.
+    const restoreAgain = await fetch(`${app.base}/api/products/${created.id}/restore`, {
+        method: 'POST'
+    });
+    assert.strictEqual(restoreAgain.status, 409);
+});
+
 test('CRUD Demo: validasi input menolak produk tidak lengkap', async (t) => {
     const app = await startDemoServer();
     t.after(() => app.cleanup());

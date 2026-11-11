@@ -53,6 +53,7 @@ export async fn createApp(options = {}) {
             "POST /api/products",
             "PUT /api/products/:id",
             "DELETE /api/products/:id",
+            "POST /api/products/:id/restore",
             "POST /api/sync"
         ]
     }));

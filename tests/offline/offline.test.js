@@ -408,3 +408,400 @@ test('offline: error offline-first — antrean tetap utuh saat server gagal', as
     const remaining = await queue.list();
     assert.strictEqual(remaining.length, 1, 'antrean harus utuh saat sinkronisasi gagal');
 });
+
+// ===== BATAS UKURAN ANTREAN SINKRONISASI =====
+
+test('offline: SyncQueue menolak entri baru ketika antrean penuh', async (t) => {
+    const cleanup = installFakeIndexedDB();
+    t.after(cleanup);
+
+    const { IndexedDBStore, SyncQueue, QueueOverflowError } = loadClientRuntime();
+    const store = new IndexedDBStore({ name: 'antrean-penuh', version: 1, stores: ['syncQueue'] });
+    await store.open();
+
+    const queue = new SyncQueue({ store, storeName: 'syncQueue', maxSize: 3 });
+
+    for (let i = 0; i < 3; i += 1) {
+        await queue.enqueue({ id: 'op-' + i, entity: 'product', op: 'update' });
+    }
+
+    assert.strictEqual((await queue.list()).length, 3);
+
+    await assert.rejects(
+        () => queue.enqueue({ id: 'op-kelabu', entity: 'product', op: 'update' }),
+        (err) => {
+            assert.ok(err instanceof QueueOverflowError, 'harus QueueOverflowError');
+            assert.strictEqual(err.code, 'QUEUE_OVERFLOW');
+            assert.strictEqual(err.details.maxSize, 3);
+            return true;
+        }
+    );
+
+    assert.strictEqual((await queue.list()).length, 3, 'antrean tidak boleh bertambah');
+});
+
+test('offline: entri dengan id yang sama menimpa dan tidak melewati batas', async (t) => {
+    const cleanup = installFakeIndexedDB();
+    t.after(cleanup);
+
+    const { IndexedDBStore, SyncQueue } = loadClientRuntime();
+    const store = new IndexedDBStore({ name: 'antrean-timpa', version: 1, stores: ['syncQueue'] });
+    await store.open();
+
+    const queue = new SyncQueue({ store, storeName: 'syncQueue', maxSize: 2 });
+
+    await queue.enqueue({ id: 'op-1', entity: 'product', op: 'update', payload: { v: 1 } });
+    await queue.enqueue({ id: 'op-2', entity: 'product', op: 'update' });
+
+    // ID sama → menimpa, panjang antrean tetap 2.
+    await queue.enqueue({ id: 'op-1', entity: 'product', op: 'update', payload: { v: 2 } });
+
+    const entries = await queue.list();
+    assert.strictEqual(entries.length, 2);
+    assert.strictEqual(entries.find((e) => e.id === 'op-1').payload.v, 2, 'entri lama harus tertimpa');
+});
+
+test('offline: batas antrean berlaku pada entri yang sudah tersimpan sebelumnya', async (t) => {
+    const cleanup = installFakeIndexedDB();
+    t.after(cleanup);
+
+    const { IndexedDBStore, SyncQueue } = loadClientRuntime();
+    const store = new IndexedDBStore({ name: 'antrean-lama', version: 1, stores: ['syncQueue'] });
+    await store.open();
+
+    // Simpan langsung ke penyimpanan, seolah dari sesi sebelumnya.
+    await store.put('syncQueue', { id: 'lama-1', entity: 'product', op: 'update', timestamp: '2026-01-01T00:00:00.000Z' });
+    await store.put('syncQueue', { id: 'lama-2', entity: 'product', op: 'update', timestamp: '2026-01-01T00:00:01.000Z' });
+
+    const queue = new SyncQueue({ store, storeName: 'syncQueue', maxSize: 2 });
+
+    await assert.rejects(
+        () => queue.enqueue({ id: 'baru-1', entity: 'product', op: 'update' }),
+        /penuh/,
+        'antrean tersimpan sebelumnya harus ikut diperhitungkan'
+    );
+});
+
+test('offline: batas default antrean ada dan bernilai wajar', async (t) => {
+    const cleanup = installFakeIndexedDB();
+    t.after(cleanup);
+
+    const { SyncQueue, DEFAULT_QUEUE_MAX_SIZE } = loadClientRuntime();
+    const queue = new SyncQueue();
+
+    assert.ok(DEFAULT_QUEUE_MAX_SIZE > 0, 'batas default harus positif');
+    assert.strictEqual(queue.maxSize, DEFAULT_QUEUE_MAX_SIZE);
+});
+
+test('offline: antrean bisa ditambah lagi setelah entri dihapus', async (t) => {
+    const cleanup = installFakeIndexedDB();
+    t.after(cleanup);
+
+    const { IndexedDBStore, SyncQueue } = loadClientRuntime();
+    const store = new IndexedDBStore({ name: 'antrean-selesai', version: 1, stores: ['syncQueue'] });
+    await store.open();
+
+    const queue = new SyncQueue({ store, storeName: 'syncQueue', maxSize: 1 });
+    await queue.enqueue({ id: 'op-1', entity: 'product', op: 'update' });
+
+    await assert.rejects(() => queue.enqueue({ id: 'op-2', entity: 'product', op: 'update' }), /penuh/);
+
+    await queue.remove('op-1');
+
+    // Setelah satu entri keluar, entri baru diterima lagi.
+    await queue.enqueue({ id: 'op-2', entity: 'product', op: 'update' });
+    assert.strictEqual((await queue.list()).length, 1);
+});
+
+// ===== BACKGROUND SYNC =====
+
+/**
+ * Pasang `navigator.serviceWorker.sync` tiruan dan kembalikan pembersih.
+ *
+ * Background Sync adalah API browser; Node tidak menyediakannya. Tiruan ini
+ * memanggil callback `register` sehingga jalur kode yang diuji sama dengan
+ * yang berjalan di browser.
+ *
+ * `globalThis.navigator` di Node adalah accessor yang hanya bisa dibaca,
+ * jadi ditulis lewat `Object.defineProperty`.
+ */
+function installFakeBackgroundSync(registerImpl) {
+    const previous = globalThis.navigator;
+    const calls = [];
+
+    const fake = {
+        serviceWorker: {
+            sync: {
+                async register(tag, options) {
+                    calls.push({ tag, options });
+                    if (registerImpl) await registerImpl(tag, options);
+                }
+            }
+        }
+    };
+
+    Object.defineProperty(globalThis, 'navigator', {
+        value: fake,
+        configurable: true,
+        writable: true
+    });
+
+    return {
+        calls,
+        cleanup: () => {
+            Object.defineProperty(globalThis, 'navigator', {
+                value: previous,
+                configurable: true,
+                writable: true
+            });
+        }
+    };
+}
+
+/**
+ * Ganti `navigator` sementara dan kembalikan nilai sebelumnya.
+ */
+function withNavigator(value, fn) {
+    const previous = globalThis.navigator;
+    Object.defineProperty(globalThis, 'navigator', {
+        value,
+        configurable: true,
+        writable: true
+    });
+    try {
+        return fn();
+    } finally {
+        Object.defineProperty(globalThis, 'navigator', {
+            value: previous,
+            configurable: true,
+            writable: true
+        });
+    }
+}
+
+test('offline: registerBackgroundSync mendaftarkan tag ke service worker', async (t) => {
+    const fake = installFakeBackgroundSync();
+    t.after(fake.cleanup);
+
+    const { registerBackgroundSync } = loadClientRuntime();
+    const result = await registerBackgroundSync('bonang-sync');
+
+    assert.strictEqual(result.supported, true);
+    assert.strictEqual(result.registered, true);
+    assert.strictEqual(fake.calls.length, 1);
+    assert.strictEqual(fake.calls[0].tag, 'bonang-sync');
+});
+
+test('offline: registerBackgroundSync melaporkan tidak didukung tanpa melempar', async () => {
+    await withNavigator({}, async () => {
+        const { registerBackgroundSync } = loadClientRuntime();
+        const result = await registerBackgroundSync();
+
+        assert.strictEqual(result.supported, false);
+        assert.strictEqual(result.registered, false);
+        assert.ok(result.reason, 'harus ada alasan');
+    });
+});
+
+test('offline: registerBackgroundSync melaporkan galat pendaftaran', async () => {
+    await withNavigator({
+        serviceWorker: {
+            sync: {
+                async register() {
+                    throw new Error('sinkronisasi ditolak');
+                }
+            }
+        }
+    }, async () => {
+        const { registerBackgroundSync } = loadClientRuntime();
+        const result = await registerBackgroundSync();
+
+        assert.strictEqual(result.supported, true);
+        assert.strictEqual(result.registered, false);
+        assert.ok(result.error.includes('ditolak'));
+    });
+});
+
+// ===== SINKRONISASI ANTAR-TAB =====
+
+/**
+ * BroadcastChannel tiruan yang menghubungkan semua instance pada nama kanal
+ * yang sama — meniru perilaku browser, di mana pesan sampai ke channel lain
+ * pada origin yang sama.
+ */
+class FakeBroadcastChannel {
+    constructor(name) {
+        this.name = name;
+        this.onmessage = null;
+        this.closed = false;
+        FakeBroadcastChannel.instances.push(this);
+    }
+
+    postMessage(data) {
+        if (this.closed) return;
+        // Kirim ke semua channel lain dengan nama yang sama.
+        for (const channel of FakeBroadcastChannel.instances) {
+            if (channel === this || channel.name !== this.name || channel.closed) continue;
+            if (channel.onmessage) channel.onmessage({ data });
+        }
+    }
+
+    close() {
+        this.closed = true;
+    }
+
+    static reset() {
+        FakeBroadcastChannel.instances = [];
+    }
+}
+
+FakeBroadcastChannel.instances = [];
+FakeBroadcastChannel.channels = new Map();
+
+function installFakeBroadcastChannel() {
+    const previous = globalThis.BroadcastChannel;
+    FakeBroadcastChannel.reset();
+    globalThis.BroadcastChannel = FakeBroadcastChannel;
+
+    return () => {
+        globalThis.BroadcastChannel = previous;
+        FakeBroadcastChannel.reset();
+    };
+}
+
+test('offline: BroadcastSync mengirim pesan ke tab lain', async (t) => {
+    const cleanup = installFakeBroadcastChannel();
+    t.after(cleanup);
+
+    const { BroadcastSync } = loadClientRuntime();
+    const a = new BroadcastSync({ channelName: 'uji-tab' });
+    const b = new BroadcastSync({ channelName: 'uji-tab' });
+
+    const received = [];
+    b.subscribe((message) => received.push(message));
+
+    const sent = a.post('queue:changed', { action: 'enqueue', id: 'op-1' });
+
+    assert.strictEqual(sent, true);
+    assert.strictEqual(received.length, 1);
+    assert.strictEqual(received[0].type, 'queue:changed');
+    assert.strictEqual(received[0].payload.id, 'op-1');
+});
+
+test('offline: BroadcastSync tidak mengirim pesan ke dirinya sendiri', async (t) => {
+    const cleanup = installFakeBroadcastChannel();
+    t.after(cleanup);
+
+    const { BroadcastSync } = loadClientRuntime();
+    const a = new BroadcastSync({ channelName: 'uji-tab' });
+
+    const received = [];
+    a.subscribe((message) => received.push(message));
+
+    a.post('queue:changed', { action: 'enqueue' });
+
+    assert.strictEqual(received.length, 0, 'tab tidak boleh menerima broadcastnya sendiri');
+});
+
+test('offline: BroadcastSync tanpa dukungan BroadcastChannel tetap bisa dibuat', async (t) => {
+    const previous = globalThis.BroadcastChannel;
+    globalThis.BroadcastChannel = undefined;
+
+    try {
+        const { BroadcastSync } = loadClientRuntime();
+        const bus = new BroadcastSync();
+
+        assert.strictEqual(bus.supported, false);
+        assert.strictEqual(bus.post('apa-saja'), false, 'post harus jadi no-op');
+    } finally {
+        globalThis.BroadcastChannel = previous;
+    }
+});
+
+test('offline: linkQueueToBroadcast menyiarkan perubahan antrean ke tab lain', async (t) => {
+    const cleanup = installFakeBroadcastChannel();
+    t.after(cleanup);
+
+    const { SyncQueue, BroadcastSync, linkQueueToBroadcast } = loadClientRuntime();
+    const queue = new SyncQueue();
+    const sender = new BroadcastSync({ channelName: 'uji-antrean' });
+    const receiver = new BroadcastSync({ channelName: 'uji-antrean' });
+
+    const received = [];
+    receiver.subscribe((message) => received.push(message));
+
+    linkQueueToBroadcast(queue, sender);
+
+    await queue.enqueue({ id: 'op-1', entity: 'product', op: 'update' });
+
+    assert.strictEqual(received.length, 1);
+    assert.strictEqual(received[0].type, 'queue:changed');
+    assert.strictEqual(received[0].payload.action, 'enqueue');
+    assert.strictEqual(received[0].payload.id, 'op-1');
+});
+
+test('offline: linkQueueToBroadcast memberi tahu tab lain saat entri dihapus', async (t) => {
+    const cleanup = installFakeBroadcastChannel();
+    t.after(cleanup);
+
+    const { SyncQueue, BroadcastSync, linkQueueToBroadcast } = loadClientRuntime();
+    const queue = new SyncQueue();
+    const sender = new BroadcastSync({ channelName: 'uji-antrean-hapus' });
+    const receiver = new BroadcastSync({ channelName: 'uji-antrean-hapus' });
+
+    const received = [];
+    receiver.subscribe((message) => received.push(message));
+
+    linkQueueToBroadcast(queue, sender);
+
+    await queue.enqueue({ id: 'op-1', entity: 'product', op: 'update' });
+    await queue.remove('op-1');
+
+    const removals = received.filter((m) => m.payload.action === 'remove');
+    assert.strictEqual(removals.length, 1);
+    assert.strictEqual(removals[0].payload.id, 'op-1');
+});
+
+test('offline: linkQueueToBroadcast memanggil onRemoteChange untuk tab lain', async (t) => {
+    const cleanup = installFakeBroadcastChannel();
+    t.after(cleanup);
+
+    const { SyncQueue, BroadcastSync, linkQueueToBroadcast } = loadClientRuntime();
+    const queue = new SyncQueue();
+    const sender = new BroadcastSync({ channelName: 'uji-remote' });
+    const receiver = new BroadcastSync({ channelName: 'uji-remote' });
+
+    const changes = [];
+    receiver.subscribe((message) => {
+        if (message.type === 'queue:changed') changes.push(message.payload);
+    });
+
+    linkQueueToBroadcast(queue, sender);
+
+    await queue.enqueue({ id: 'op-1', entity: 'product', op: 'update' });
+
+    assert.strictEqual(changes.length, 1);
+    assert.strictEqual(changes[0].id, 'op-1');
+});
+
+test('offline: linkQueueToBroadcast bisa dilepas dan mengembalikan antrean apa adanya', async (t) => {
+    const cleanup = installFakeBroadcastChannel();
+    t.after(cleanup);
+
+    const { SyncQueue, BroadcastSync, linkQueueToBroadcast } = loadClientRuntime();
+    const queue = new SyncQueue();
+    const sender = new BroadcastSync({ channelName: 'uji-lepas' });
+    const receiver = new BroadcastSync({ channelName: 'uji-lepas' });
+
+    const received = [];
+    receiver.subscribe((message) => received.push(message));
+
+    const unlink = linkQueueToBroadcast(queue, sender);
+    await queue.enqueue({ id: 'op-1', entity: 'product', op: 'update' });
+    assert.strictEqual(received.length, 1);
+
+    unlink();
+
+    await queue.enqueue({ id: 'op-2', entity: 'product', op: 'update' });
+    assert.strictEqual(received.length, 1, 'setelah dilepas tidak ada lagi broadcast');
+});

@@ -26,11 +26,32 @@ class Scope {
     constructor(parent) {
         this.parent = parent;
         this.names = new Map();
+        // Nama yang berasal dari import: dipetakan ke (variabel modul,
+        // nama ekspor) supaya nilainya dibaca secara live dari
+        // `module.exports` setiap kali dipakai.
+        this.imports = new Map();
     }
 
     declare(bonangName) {
         const jsName = this.pickName(bonangName);
         this.names.set(bonangName, jsName);
+        // Deklarasi lokal menggantikan nama yang sebelumnya diimpor —
+        // Bonang mengizinkan shadowing nama import.
+        this.imports.delete(bonangName);
+        return jsName;
+    }
+
+    /**
+     * Deklarasikan nama yang berasal dari import modul lain.
+     *
+     * Nama lokal dicatat di `names` (agar bisa di-shadow oleh deklarasi
+     * lokal — Bonang mengizinkan hal itu) dan dipetakan ke sumber
+     * ekspornya di `imports`.
+     */
+    declareImport(localName, moduleVar, exportedName) {
+        const jsName = this.pickName(localName);
+        this.names.set(localName, jsName);
+        this.imports.set(localName, { moduleVar, exportedName });
         return jsName;
     }
 
@@ -55,6 +76,19 @@ class Scope {
         }
         return null;
     }
+
+    /**
+     * Cari sumber import untuk sebuah nama, kalau ada.
+     */
+    lookupImport(bonangName) {
+        let scope = this;
+        while (scope) {
+            const found = scope.imports.get(bonangName);
+            if (found) return found;
+            scope = scope.parent;
+        }
+        return null;
+    }
 }
 
 /**
@@ -67,6 +101,10 @@ class CodegenContext {
         this.imports = [];
         this.exportedNames = [];
         this.needsIterableHelper = false;
+        // Dynamic import butuh helper runtime yang menyelesaikan path
+        // modul relatif terhadap file yang memanggilnya.
+        this.needsDynamicImportHelper = false;
+        this.dynamicImports = [];
     }
 
     temp(prefix = 't') {
@@ -402,6 +440,31 @@ class Generator {
         return out;
     }
 
+    /**
+     * Import statement.
+     *
+     * **Live binding**
+     * ---------------
+     * `const { a } = require(...)` menangkap nilai a **saat import
+     * dijalankan**. Pada siklus modul, saat modul A diimpor oleh B, A
+     * belum selesai dievaluasi sehingga `a` masih `undefined` — nilainya
+     * tidak pernah ikut terbawa.
+     *
+     * Karena itu nama yang diimpor dipetakan ke accessor yang membaca
+     * `module.exports` **setiap kali dipakai**:
+     *
+     * ```js
+     * const __bngMod_0 = require("./b.bng");
+     * // `a` -> __bngMod_0.a
+     * ```
+     *
+     * Ini memberi semantics live binding yang sama dengan ES module,
+     * dan membuat siklus modul bisa dipakai: nilai diambil saat
+     * runtime, bukan saat import.
+     *
+     * Import namespace (`import * as ns`) tetap memakai objek modul
+     * langsung — objek tersebut hidup dan berubah isinya.
+     */
     generateImport(node) {
         const path = node.source;
         const isNamespace = node.specifiers.some((s) => s.imported === '*');
@@ -414,8 +477,19 @@ class Generator {
         if (node.specifiers.length === 0) {
             return `require(${JSON.stringify(path)});`;
         }
-        const names = node.specifiers.map((s) => s.local);
-        return `const { ${names.join(', ')} } = require(${JSON.stringify(path)});`;
+
+        // Modul disimpan dalam variabel agar nama yang diimpor bisa
+        // dibaca secara live dari `module.exports`.
+        const modVar = this.ctx.temp('mod');
+        const lines = [`const ${modVar} = require(${JSON.stringify(path)});`];
+
+        for (const spec of node.specifiers) {
+            // Nama lokal dideklarasikan di scope modul supaya `generateIdentifier`
+            // bisa memetakannya ke akses properti modul.
+            this.scope.declareImport(spec.local, modVar, spec.imported);
+        }
+
+        return lines.join('\n');
     }
 
     generateExport(node) {
@@ -424,7 +498,13 @@ class Generator {
         // `export { a, b as c }` — ekspor nama yang sudah dideklarasikan.
         if (!decl) {
             const pairs = node.specifiers.map((s) => {
-                const jsName = this.scope.lookup(s.local) || s.local;
+                // Nama yang berasal dari import diekspor dari modul asalnya
+                // (`mod.nama`), bukan dari binding lokal yang nilainya
+                // mungkin belum terisi saat siklus modul terjadi.
+                const imported = this.scope.lookupImport(s.local);
+                const jsName = imported
+                    ? this.importedAccess(imported)
+                    : (this.scope.lookup(s.local) || s.local);
                 this.ctx.exportedNames.push(s.exported);
                 return `${s.exported}: ${jsName}`;
             });
@@ -495,6 +575,8 @@ class Generator {
                 return this.generateCall(node);
             case 'NewExpression':
                 return `new ${this.generateExpression(node.callee)}(${node.args.map((a) => this.generateExpression(a)).join(', ')})`;
+            case 'ImportExpression':
+                return this.generateImportExpression(node);
             case 'MemberExpression':
                 return this.generateMember(node);
             case 'ArrowFunctionExpression':
@@ -517,10 +599,52 @@ class Generator {
     /**
      * Identifier yang terikat pada scope Bonang dipetakan ke nama JS-nya.
      * Identifier yang tidak terikat dianggap global (mis. `console`, `Math`).
+     *
+     * Nama yang berasal dari import accessing `module.exports` setiap kali
+     * dipakai (live binding) — lihat `generateImport`.
      */
+    /**
+     * Ekspresi `import("...")` — pemuatan modul saat runtime.
+     *
+     * Path harus statis (literal string) agar bundler bisa memuat modul
+     * tersebut di dalam bundel. Path yang tidak literal ditolak: nilainya
+     * tidak bisa diketahui saat build, jadi hasilnya tidak deterministik.
+     */
+    generateImportExpression(node) {
+        const source = node.source;
+        if (!source || source.type !== 'Literal' || typeof source.value !== 'string') {
+            this.error(
+                'import() hanya menerima string literal (path modul harus diketahui saat build)',
+                node
+            );
+        }
+        const path = source.value;
+        this.ctx.dynamicImports.push(path);
+        this.ctx.needsDynamicImportHelper = true;
+        return `_$$dynamicImport(${JSON.stringify(path)})`;
+    }
+
     generateIdentifier(node) {
+        const imported = this.scope.lookupImport(node.name);
+        if (imported) {
+            return this.importedAccess(imported);
+        }
         const mapped = this.scope.lookup(node.name);
         return mapped !== null ? mapped : node.name;
+    }
+
+    /**
+     * Akses properti pada variabel modul untuk nama hasil import.
+     *
+     * Nama ekspor yang bukan identifier JS valid ditulis sebagai
+     * `mod["nama"]`.
+     */
+    importedAccess(imported) {
+        const exported = imported.exportedName;
+        const prop = /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(exported)
+            ? `.${exported}`
+            : `[${JSON.stringify(exported)}]`;
+        return `${imported.moduleVar}${prop}`;
     }
 
     generateTemplateLiteral(node) {
@@ -568,8 +692,9 @@ class Generator {
         // `typeof x` akan menjadi `typeofx` dan merusak sintaks JavaScript.
         if (op === 'typeof' || op === 'void' || op === 'delete') {
             if (node.argument.type === 'Identifier') {
-                const mapped = this.scope.lookup(node.argument.name);
-                return `${op} ${mapped !== null ? mapped : node.argument.name}`;
+                // `generateIdentifier` dipakai (bukan `scope.lookup`) supaya
+                // nama yang berasal dari import tetap dibaca dari modulnya.
+                return `${op} ${this.generateIdentifier(node.argument)}`;
             }
             return `${op} ${this.generateExpression(node.argument)}`;
         }
@@ -683,6 +808,29 @@ const RUNTIME_HELPERS = {
   if (typeof value[Symbol.iterator] === 'function') return Array.from(value);
   if (typeof value === 'object') return Object.keys(value).map((k) => value[k]);
   return [];
+}`,
+    /**
+     * Dynamic import.
+     *
+     * Modul dimuat lalu dibungkus dalam Promise. Path relatif diselesaikan
+     * oleh `require` Bonang milik modul pemanggil, sehingga
+     * `import("./x.bng")` berperilaku sama dengan `require("./x.bng")`.
+     *
+     * Di bundel, panggilan ini sudah ditulis ulang saat build menjadi
+     * `Promise.resolve(__bngRequire("id"))` — helper ini hanya dipakai
+     * ketika program dijalankan langsung dari sumber.
+     */
+    dynamicImport: `function _$$dynamicImport(specifier) {
+  try {
+    if (typeof require !== 'function') {
+      return Promise.reject(new Error(
+        'Dynamic import tidak didukung di lingkungan ini: ' + specifier
+      ));
+    }
+    return Promise.resolve(require(specifier));
+  } catch (err) {
+    return Promise.reject(err);
+  }
 }`
 };
 
@@ -696,11 +844,15 @@ function generate(ast, options = {}) {
     if (gen.ctx.needsIterableHelper) {
         helpers.push(RUNTIME_HELPERS.iterable);
     }
+    if (gen.ctx.needsDynamicImportHelper) {
+        helpers.push(RUNTIME_HELPERS.dynamicImport);
+    }
     return {
         code,
         helpers,
         imports: gen.ctx.imports,
-        exportedNames: gen.ctx.exportedNames
+        exportedNames: gen.ctx.exportedNames,
+        dynamicImports: gen.ctx.dynamicImports
     };
 }
 

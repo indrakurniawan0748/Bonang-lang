@@ -18,8 +18,8 @@ Rilis **0.1.0** (2026-11-11). Lengkap dan terverifikasi.
 
 | Metrik | Nilai |
 | --- | --- |
-| Test | 257 lulus, 0 gagal, 0 dilewati |
-| Bug | 39 tercatat, 39 Fixed, 0 Open |
+| Test | 356 lulus, 0 gagal, 0 dilewati |
+| Bug | 48 tercatat, 48 Fixed, 0 Open |
 | Audit statis | 0 temuan pada kode referensi |
 | Dependensi eksternal | **0** |
 
@@ -44,9 +44,12 @@ benar-benar berjalan.
 - Menyimpan data di SQLite dengan prepared statement dan query builder.
 - Membangun, meng-lint, meng-audit, meng-benchmark, dan memigrasikan
   semuanya dari satu CLI.
+- Melayani HTTP dengan header keamanan bawaan (CSP, `nosniff`,
+  `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`) yang dapat
+  ditimpa per-route.
 
 **Yang belum ada (jujur):** type checker, ORM, soft delete, keyset
-pagination, enkripsi at-rest, sinkronisasi background. Daftar lengkap 31
+pagination, enkripsi at-rest, sinkronisasi background. Daftar lengkap 26
 batasan: [`docs/KNOWN_LIMITATIONS.md`](docs/KNOWN_LIMITATIONS.md).
 
 ---
@@ -202,11 +205,12 @@ Shared hosting PHP biasa tidak bisa menjalankan Bonang.
 | --- | --- |
 | `bonang init <dir>` | Membuat proyek Bonang baru |
 | `bonang run <entry>` | Kompilasi lalu jalankan |
-| `bonang build` | Bundel server + client ke `dist/` |
+| `bonang build` | Bundel server + client ke `dist/` + `precache-manifest.json` |
 | `bonang dev` | Dev server dengan hot reload (SSE) |
 | `bonang test` | Menjalankan test suite Bonang |
-| `bonang lint` | 10 aturan analisis statis |
-| `bonang audit` | 7 pemeriksaan keamanan (AST-based) |
+| `bonang lint` | 9 aturan analisis statis |
+| `bonang audit` | 8 pemeriksaan keamanan (AST-based) |
+| `bonang audit --structure` | Audit struktur: siklus dependensi, dead code, duplikasi |
 | `bonang bench` | 5 skenario benchmark |
 | `bonang migrate` | Menjalankan migrasi database |
 | `bonang version` | Versi bahasa |
@@ -289,7 +293,7 @@ compiler/      lexer, parser, AST, codegen, bundler
 runtime/       core, async, http, database, security, filesystem, client
 standard-library/
 package-manager/
-cli/           cli, linter, auditor, dev-server, migrate
+cli/           cli, linter, auditor, structure-audit, dev-server, migrate
 apps/          bonang-crud-demo
 examples/
 tests/         unit, integration, regression, offline, concurrency,
@@ -303,7 +307,7 @@ docs/          19 dokumen desain dan status
 ## Menjalankan Test
 
 ```bash
-npm test               # 257 test, semua suite
+npm test               # 356 test, semua suite
 node --test "tests/unit/*.test.js"
 node --test "tests/security/*.test.js"
 node --test "tests/tools/bundler.test.js"
@@ -333,7 +337,7 @@ npm test                      # pastikan baseline hijau
 git checkout -b feat/nama-fitur
 # ... tulis kode + test ...
 
-npm test && node cli/cli.js lint && node cli/cli.js audit
+npm test && node cli/cli.js lint && node cli/cli.js audit --structure
 git commit -m "feat(scope): deskripsi singkat"
 git push && buka Pull Request
 ```
@@ -392,9 +396,9 @@ Metodologi lengkap: [`benchmarks/RESULTS.md`](benchmarks/RESULTS.md).
 | [PRD.md](docs/PRD.md) | Requirements |
 | [TECHNICAL_DECISIONS.md](docs/TECHNICAL_DECISIONS.md) | Keputusan dan alasannya |
 | [RISK_REGISTER.md](docs/RISK_REGISTER.md) | Risiko dan mitigasi |
-| [BUG_TRACKER.md](docs/BUG_TRACKER.md) | 39 bug dan perbaikannya |
+| [BUG_TRACKER.md](docs/BUG_TRACKER.md) | 48 bug dan perbaikannya |
 | [AUDIT_REPORT.md](docs/AUDIT_REPORT.md) | Hasil audit |
-| [KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md) | 31 batasan terverifikasi |
+| [KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md) | 24 batasan terverifikasi |
 | [PROJECT_PROGRESS.md](docs/PROJECT_PROGRESS.md) | Status per fase |
 | [TEST_REPORT.md](docs/TEST_REPORT.md) | Hasil pengujian |
 | [CHANGELOG.md](docs/CHANGELOG.md) | Riwayat perubahan |

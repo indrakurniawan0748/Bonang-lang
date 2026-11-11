@@ -77,7 +77,10 @@ export class ProductService {
     }
 
     /**
-     * Hapus produk.
+     * Hapus produk (soft delete).
+     *
+     * Baris tetap ada di tabel; hanya ditandai terhapus. Produk yang
+     * sudah terhapus tidak lagi bisa diubah sampai dipulihkan.
      */
     async remove(id) {
         const existing = await this.repository.findById(id);
@@ -89,6 +92,26 @@ export class ProductService {
             throw new NotFoundError(`Produk dengan id ${id} gagal dihapus`);
         }
         return true;
+    }
+
+    /**
+     * Kembalikan produk yang sebelumnya dihapus.
+     */
+    async restore(id) {
+        // Baris yang terhapus tidak terlihat lewat `findById` biasa, jadi
+        // diperiksa dengan `includeDeleted`.
+        const existing = await this.repository.findById(id, { includeDeleted: true });
+        if (!existing) {
+            throw new NotFoundError(`Produk dengan id ${id} tidak ditemukan`);
+        }
+        if (!existing.deletedAt) {
+            throw new ConflictError(`Produk ${id} tidak dalam keadaan terhapus`);
+        }
+        const restored = await this.repository.restore(id);
+        if (!restored) {
+            throw new NotFoundError(`Produk dengan id ${id} gagal dipulihkan`);
+        }
+        return this.repository.findById(id);
     }
 
     /**

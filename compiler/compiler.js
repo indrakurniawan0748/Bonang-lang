@@ -91,9 +91,25 @@ class Compiler {
 /**
  *Buat fungsi `require` sederhana yang hanya mendukung modul Bonang
  * dan modul Node bawaan.
+ *
+ * **Siklus modul**
+ * ---------------
+ * Modul Bonang boleh mengimpor modul yang (langsung atau tak langsung)
+ * mengimpornya kembali. Tanpa penanganan khusus, A → B → A menyebabkan
+ * rekursi tak terbatas dan berakhir dengan stack overflow.
+ *
+ * Modul yang sedang dievaluasi dimasukkan ke cache **sebelum** body-nya
+ * dieksekusi. Ketika siklus terjadi, `require` untuk modul yang sedang
+ * dievaluasi mengembalikan `module.exports` yang masih kosong — persis
+ * seperti perilaku CommonJS di Node. Modul yang memakai nilai dari
+ * modul siklik harus mengambilnya saat runtime (bukan saat import di
+ * tingkat atas), yang memang satu-satunya cara yang benar.
+ *
+ * Cache diwariskan ke modul anak (`createRequire(resolved, cache)`),
+ * sehingga satu siklus dikenali sebagai satu siklus, bukan dua.
  */
-function createRequire(fromFile) {
-    const cache = new Map();
+function createRequire(fromFile, sharedCache = null) {
+    const cache = sharedCache || new Map();
     const baseDir = path.dirname(path.resolve(fromFile));
 
     // `nodeRequire` disimpan terpisah: parameter fungsi di bawah bernama
@@ -118,16 +134,20 @@ function createRequire(fromFile) {
         if (!resolved) {
             throw new Error(`Modul tidak ditemukan: ${request}`);
         }
+        // Modul sudah selesai dimuat (atau sedang dimuat) — kembalikan
+        // exports-nya. Untuk siklus, exports masih kosong, sesuai
+        // perilaku CommonJS.
         if (cache.has(resolved)) return cache.get(resolved).exports;
 
         const moduleObj = { exports: {} };
+        // Daftarkan SEBELUM evaluasi supaya siklus tidak rekursi.
         cache.set(resolved, moduleObj);
 
         const source = fs.readFileSync(resolved, 'utf8');
         const compiler = new Compiler();
         const result = compiler.compile(source, resolved);
         const fn = new Function('module', 'exports', 'require', '__filename', '__dirname', result.code);
-        fn(moduleObj, moduleObj.exports, createRequire(resolved), resolved, path.dirname(resolved));
+        fn(moduleObj, moduleObj.exports, createRequire(resolved, cache), resolved, path.dirname(resolved));
         return moduleObj.exports;
     };
 }

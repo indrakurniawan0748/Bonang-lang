@@ -273,6 +273,126 @@ test('db: QueryBuilder menolak nama tabel dan kolom yang berbahaya', async (t) =
     );
 });
 
+// ===== KEYSET PAGINATION =====
+
+/**
+ * Siapkan tabel dengan kolom `score` yang sengaja duplikat — untuk
+ * menguji bahwa cursor dua kolom tidak melompati baris.
+ */
+async function seedCursorTable(pool) {
+    await pool.execute('CREATE TABLE posts (id INTEGER PRIMARY KEY, score INTEGER, title TEXT)');
+    const rows = [
+        [10, 'a'], [20, 'b'], [20, 'c'], [20, 'd'], [30, 'e'], [40, 'f'], [50, 'g']
+    ];
+    for (const [score, title] of rows) {
+        await pool.execute('INSERT INTO posts (score, title) VALUES (?, ?)', [score, title]);
+    }
+}
+
+test('db: keyset pagination mengambil halaman pertama tanpa cursor', async (t) => {
+    const { pool, cleanup } = await makePool();
+    t.after(cleanup);
+    await seedCursorTable(pool);
+
+    const page = await QueryBuilder.from(pool, 'posts')
+        .paginateByCursor(null, 3, { orderColumn: 'score', tieColumn: 'id' });
+
+    assert.strictEqual(page.data.length, 3);
+    assert.strictEqual(page.meta.hasNext, true);
+    assert.ok(page.meta.nextCursor, 'cursor berikutnya harus ada');
+    assert.strictEqual(page.meta.nextCursor.score, 20);
+});
+
+test('db: keyset pagination melewati semua baris tepat satu kali', async (t) => {
+    const { pool, cleanup } = await makePool();
+    t.after(cleanup);
+    await seedCursorTable(pool);
+
+    const seen = [];
+    let cursor = null;
+    let guard = 0;
+
+    do {
+        const page = await QueryBuilder.from(pool, 'posts')
+            .paginateByCursor(cursor, 2, { orderColumn: 'score', tieColumn: 'id' });
+        for (const row of page.data) seen.push(row.id);
+        cursor = page.meta.nextCursor;
+        guard += 1;
+    } while (cursor && guard < 10);
+
+    assert.strictEqual(seen.length, 7, 'semua baris harus terkirim');
+    assert.strictEqual(new Set(seen).size, 7, 'tidak ada baris yang terulang');
+    assert.deepStrictEqual(seen, [1, 2, 3, 4, 5, 6, 7]);
+});
+
+test('db: keyset pagination tidak melompati baris dengan nilai kolom yang sama', async (t) => {
+    const { pool, cleanup } = await makePool();
+    t.after(cleanup);
+    await seedCursorTable(pool);
+
+    // Halaman pertama berhenti di tengah kelompok score = 20.
+    const first = await QueryBuilder.from(pool, 'posts')
+        .paginateByCursor(null, 2, { orderColumn: 'score', tieColumn: 'id' });
+    assert.deepStrictEqual(first.data.map((r) => r.id), [1, 2]);
+
+    // Halaman kedua harus melanjutkan tepat setelah id 2, bukan melompat
+    // ke seluruh kelompok score = 20.
+    const second = await QueryBuilder.from(pool, 'posts')
+        .paginateByCursor(first.meta.nextCursor, 2, { orderColumn: 'score', tieColumn: 'id' });
+    assert.deepStrictEqual(second.data.map((r) => r.id), [3, 4]);
+});
+
+test('db: keyset pagination halaman terakhir tidak punya cursor berikutnya', async (t) => {
+    const { pool, cleanup } = await makePool();
+    t.after(cleanup);
+    await seedCursorTable(pool);
+
+    const page = await QueryBuilder.from(pool, 'posts')
+        .paginateByCursor({ score: 40, id: 6 }, 10, { orderColumn: 'score', tieColumn: 'id' });
+
+    assert.strictEqual(page.data.length, 1);
+    assert.strictEqual(page.meta.hasNext, false);
+    assert.strictEqual(page.meta.nextCursor, null);
+});
+
+test('db: keyset pagination mendukung arah DESC', async (t) => {
+    const { pool, cleanup } = await makePool();
+    t.after(cleanup);
+    await seedCursorTable(pool);
+
+    const page = await QueryBuilder.from(pool, 'posts')
+        .paginateByCursor(null, 3, { orderColumn: 'score', tieColumn: 'id', direction: 'DESC' });
+
+    assert.deepStrictEqual(page.data.map((r) => r.id), [7, 6, 5]);
+    assert.strictEqual(page.meta.hasNext, true);
+});
+
+test('db: keyset pagination menolak nama kolom yang berbahaya', async (t) => {
+    const { pool, cleanup } = await makePool();
+    t.after(cleanup);
+    await seedCursorTable(pool);
+
+    await assert.rejects(
+        () => QueryBuilder.from(pool, 'posts')
+            .paginateByCursor(null, 3, { orderColumn: 'score; DROP TABLE posts' }),
+        /tidak valid/i
+    );
+});
+
+test('db: keyset pagination memakai placeholder, bukan nilai mentah', async (t) => {
+    const { pool, cleanup } = await makePool();
+    t.after(cleanup);
+    await seedCursorTable(pool);
+
+    // Cursor berisi payload injeksi — harus diperlakukan sebagai data.
+    const page = await QueryBuilder.from(pool, 'posts')
+        .paginateByCursor({ score: '20 OR 1=1', id: 2 }, 10, { orderColumn: 'score', tieColumn: 'id' });
+
+    assert.strictEqual(page.data.length, 0, 'tidak ada baris yang cocok dengan string injeksi');
+    const total = await QueryBuilder.from(pool, 'posts').count();
+    assert.strictEqual(total, 7, 'tabel harus utuh');
+});
+
 test('db: QueryBuilder menolak operator di luar allowlist', async (t) => {
     const { pool, cleanup } = await makePool();
     t.after(cleanup);
@@ -362,4 +482,50 @@ test('db: transaksi rollback mengembalikan koneksi ke pool', async (t) => {
 
     const stats = pool.getStats();
     assert.strictEqual(stats.waiting, 0, 'tidak boleh ada waiter yang menggantung');
+});
+
+// ===== SQL MENTAH: VALIDASI PLACEHOLDER =====
+
+test('db: whereRaw menolak SQL dengan statement tambahan', (t) => {
+    const pool = { query: async () => [] };
+    assert.throws(
+        () => QueryBuilder.from(pool, 'items').whereRaw('id = ?; DROP TABLE items', 1),
+        /satu statement/,
+        'statement tambahan harus ditolak'
+    );
+});
+
+test('db: whereRaw menolak jumlah placeholder yang tidak cocok', (t) => {
+    const pool = { query: async () => [] };
+    assert.throws(
+        () => QueryBuilder.from(pool, 'items').whereRaw('name = ? AND price > ?', 1),
+        /placeholder tidak cocok/,
+        'jumlah placeholder harus dicocokkan dengan jumlah parameter'
+    );
+});
+
+test('db: having menolak jumlah placeholder yang tidak cocok', (t) => {
+    const pool = { query: async () => [] };
+    assert.throws(
+        () => QueryBuilder.from(pool, 'items').having('total > ?', 1, 2),
+        /placeholder tidak cocok/
+    );
+});
+
+test('db: whereRaw menerima placeholder yang cocok', (t) => {
+    const pool = { query: async () => [] };
+    const qb = QueryBuilder.from(pool, 'items').whereRaw('name = ? AND price > ?', 'a', 10);
+    const sql = qb.buildSelect();
+    assert.ok(sql.includes('name = ? AND price > ?'), sql);
+});
+
+test('db: titik koma di dalam string literal tidak dianggap statement tambahan', (t) => {
+    const pool = { query: async () => [] };
+    const qb = QueryBuilder.from(pool, 'items').whereRaw("note = 'a; b' AND id = ?", 1);
+    assert.ok(qb.buildSelect().includes("note = 'a; b' AND id = ?"));
+});
+
+test('db: whereRaw menolak SQL kosong', (t) => {
+    const pool = { query: async () => [] };
+    assert.throws(() => QueryBuilder.from(pool, 'items').whereRaw('   '), /tidak boleh kosong/);
 });

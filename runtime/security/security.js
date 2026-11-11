@@ -93,6 +93,54 @@ function verifySignature(payload, signature, secret, algorithm = 'sha256') {
     return timingSafeEqual(Buffer.from(expected), Buffer.from(String(signature)));
 }
 
+// ===== SIGNED COOKIE =====
+
+/**
+ * Pemisah antara nilai dan signature di dalam cookie bertanda tangan.
+ *
+ * Karakter ini tidak mungkin muncul di base64 hasil encodeURIComponent
+ * (`=` dan `.` di-encode), sehingga pemisahan selalu unambiguous.
+ */
+const SIGNED_COOKIE_SEPARATOR = '.';
+
+/**
+ * Buat nilai cookie bertanda tangan.
+ *
+ * Format: `<nilai>.<signature HMAC>`.
+ *
+ * Tujuannya: nilai cookie bisa dibaca client (tidak perlu decode server),
+ * tetapi tidak bisa diubah client tanpa secret. Tanpa ini, cookie harus
+ * dipercaya apa adanya atau di-tokenize — dua-duanya tidak praktis.
+ */
+function signValue(value, secret, algorithm = 'sha256') {
+    const payload = String(value);
+    const signature = sign(payload, secret, algorithm);
+    return `${payload}${SIGNED_COOKIE_SEPARATOR}${signature}`;
+}
+
+/**
+ * Baca dan verifikasi nilai cookie bertanda tangan.
+ *
+ * Mengembalikan nilai aslinya bila signature cocok, atau `null` bila
+ * cookie tidak bertanda tangan, rusak, atau signature tidak cocok.
+ *
+ * `null` (bukan `undefined`) dipilih agar bisa dibedakan dari nilai kosong
+ * yang sah.
+ */
+function verifySignedValue(signed, secret, algorithm = 'sha256') {
+    if (typeof signed !== 'string' || signed === '') return null;
+    if (typeof secret !== 'string' || secret === '') return null;
+
+    const index = signed.lastIndexOf(SIGNED_COOKIE_SEPARATOR);
+    if (index <= 0) return null;
+
+    const payload = signed.slice(0, index);
+    const signature = signed.slice(index + 1);
+
+    if (!verifySignature(payload, signature, secret, algorithm)) return null;
+    return payload;
+}
+
 // ===== CSRF =====
 
 /**
@@ -317,6 +365,9 @@ module.exports = {
     uuid,
     sign,
     verifySignature,
+    signValue,
+    verifySignedValue,
+    SIGNED_COOKIE_SEPARATOR,
     createCsrfToken,
     verifyCsrfToken,
     escapeHtml,

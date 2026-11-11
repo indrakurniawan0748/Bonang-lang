@@ -8,7 +8,7 @@
  * pola identifier yang aman.
  */
 
-const IDENTIFIER_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const { IDENTIFIER_PATTERN, assertIdentifier } = require('./identifiers');
 
 // Jenis JOIN yang boleh dipakai — allowlist, bukan teks bebas.
 const JOIN_TYPES = new Set(['INNER', 'LEFT', 'LEFT OUTER', 'CROSS']);
@@ -17,17 +17,6 @@ const JOIN_TYPES = new Set(['INNER', 'LEFT', 'LEFT OUTER', 'CROSS']);
 // dengan operator=, sehingga tidak ada string bebas yang bisa disisipkan.
 const JOIN_CONDITION_PATTERN =
     /^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?\s*=\s*[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$/;
-
-/**
- * Pastikan nama kolom/tabel aman untuk disisipkan ke SQL.
- * Nilai user TIDAK boleh melewati fungsi ini — hanya nama struktural.
- */
-function assertIdentifier(name, label = 'identifier') {
-    if (typeof name !== 'string' || !IDENTIFIER_PATTERN.test(name)) {
-        throw new Error(`Nama ${label} tidak valid: '${name}'`);
-    }
-    return name;
-}
 
 /**
  * Validasi kondisi JOIN.
@@ -40,6 +29,89 @@ function assertJoinCondition(condition) {
         throw new Error(`Kondisi JOIN tidak valid: '${condition}'`);
     }
     return condition.trim();
+}
+
+/**
+ * Validasi SQL mentah pada `whereRaw`/`having`.
+ *
+ * SQL mentah tidak bisa di-parameterkan, jadi bentuknya dibatasi:
+ *  - hanya satu statement (tidak boleh ada `;` di luar string literal),
+ *  - jumlah placeholder `?` harus sama dengan jumlah parameter.
+ *
+ * Pemeriksaan kedua menutup kelas bug yang paling sering terjadi:
+ * `whereRaw("x = ? AND y = ?", a)` — satu parameter hilang, sehingga
+ * nilai_a terikat ke y dan具合 dari kondisi kedua salah.
+ */
+function assertRawSql(sql, paramCount) {
+    if (typeof sql !== 'string' || sql.trim() === '') {
+        throw new Error('SQL mentah tidak boleh kosong');
+    }
+    if (hasStatementSeparator(sql)) {
+        throw new Error(
+            'SQL mentah hanya boleh satu statement — pisahkan dengan query terpisah'
+        );
+    }
+    const placeholders = countPlaceholders(sql);
+    if (placeholders !== paramCount) {
+        throw new Error(
+            `Jumlah placeholder tidak cocok: SQL punya ${placeholders} placeholder, ` +
+            `tapi ${paramCount} parameter diberikan`
+        );
+    }
+    return sql;
+}
+
+/**
+ * Deteksi `;` di luar string literal — tandastatement tambahan.
+ */
+function hasStatementSeparator(sql) {
+    let quote = null;
+    for (let i = 0; i < sql.length; i += 1) {
+        const ch = sql[i];
+        if (quote) {
+            if (ch === '\\') {
+                i += 1;
+                continue;
+            }
+            if (ch === quote) quote = null;
+            continue;
+        }
+        if (ch === "'" || ch === '"') {
+            quote = ch;
+            continue;
+        }
+        if (ch === ';') {
+            // Titik koma di akhir SQL sah (percuma saja, tapi tidak berbahaya).
+            const rest = sql.slice(i + 1).trim();
+            if (rest !== '') return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * Hitung placeholder `?` di luar string literal.
+ */
+function countPlaceholders(sql) {
+    let count = 0;
+    let quote = null;
+    for (let i = 0; i < sql.length; i += 1) {
+        const ch = sql[i];
+        if (quote) {
+            if (ch === '\\') {
+                i += 1;
+                continue;
+            }
+            if (ch === quote) quote = null;
+            continue;
+        }
+        if (ch === "'" || ch === '"') {
+            quote = ch;
+            continue;
+        }
+        if (ch === '?') count += 1;
+    }
+    return count;
 }
 
 class QueryBuilder {
@@ -126,7 +198,7 @@ class QueryBuilder {
     }
 
     whereRaw(sql, ...params) {
-        this.wheres.push(sql);
+        this.wheres.push(assertRawSql(sql, params.length));
         this.params.push(...params);
         return this;
     }
@@ -148,7 +220,7 @@ class QueryBuilder {
     }
 
     having(sql, ...params) {
-        this.havings.push(sql);
+        this.havings.push(assertRawSql(sql, params.length));
         this.params.push(...params);
         return this;
     }
@@ -238,6 +310,78 @@ class QueryBuilder {
             }
         };
     }
+
+    /**
+     * Paginasi keyset (cursor).
+     *
+     * Offset pagination harus menghitung `OFFSET n` — biaya query naik
+     * seiring naiknya `n`, dan baris bisa bergeser di antara halaman bila
+     * ada data yang masuk/keluar. Keyset pagination memakai "titik terakhir
+     * yang dilihat" (cursor) sebagai titik awal, sehingga biaya query
+     * tetap konstan dan halaman tidak saling tumpang tindih.
+     *
+     * Determinisme
+     * ------------
+     * Satu kolom pengurutan sering punya nilai yang sama pada beberapa
+     * baris (mis. `created_at` dalam detik yang sama). Cursor satu kolom
+     * lalu bisa melompati atau mengulang baris. Karena itu keyset memakai
+     * **dua** kolom: kolom utama (`orderColumn`) plus kolom penyeimbang
+     * (`tieColumn`, default `id`) yang harus unik.
+     *
+     * Kondisi cursor untuk arah ASC:
+     *   (a > ?) OR (a = ? AND b > ?)
+     * Arah DESC memakai `<`. Nilai keduanya tetap berparameter.
+     *
+     * @param {object} cursor  { [kolom]: nilai } titik awal, boleh null.
+     * @param {number} perPage jumlah baris per halaman.
+     * @param {object} options { orderColumn, tieColumn, direction }.
+     */
+    async paginateByCursor(cursor, perPage = 10, options = {}) {
+        const size = Math.min(Math.max(1, parseInt(perPage, 10) || 10), 100);
+        const orderColumn = assertIdentifier(options.orderColumn || 'id', 'kolom');
+        const tieColumn = assertIdentifier(options.tieColumn || 'id', 'kolom');
+        const direction = String(options.direction || 'ASC').toUpperCase() === 'DESC' ? 'DESC' : 'ASC';
+        const comparison = direction === 'DESC' ? '<' : '>';
+
+        const hasOrder = cursor && cursor[orderColumn] !== undefined && cursor[orderColumn] !== null;
+        const hasTie = cursor && cursor[tieColumn] !== undefined && cursor[tieColumn] !== null;
+
+        if (hasOrder && hasTie) {
+            // (a > ?) OR (a = ? AND b > ?) — dua placeholder untuk a,
+            // satu untuk b. Semua nilainya berparameter.
+            this.whereRaw(
+                `(${orderColumn} ${comparison} ?) OR (${orderColumn} = ? AND ${tieColumn} ${comparison} ?)`,
+                cursor[orderColumn], cursor[orderColumn], cursor[tieColumn]
+            );
+        } else if (hasOrder) {
+            this.where(orderColumn, comparison, cursor[orderColumn]);
+        }
+
+        this.orderBy(orderColumn, direction);
+        this.orderBy(tieColumn, direction);
+        // Ambil satu baris lebih untuk mengetahui apakah ada halaman berikutnya
+        // tanpa menjalankan COUNT(*) — COUNT pada tabel besar mahal.
+        this.limit(size + 1);
+
+        const rows = await this.get();
+        const hasNext = rows.length > size;
+        const data = hasNext ? rows.slice(0, size) : rows;
+
+        let nextCursor = null;
+        if (hasNext && data.length > 0) {
+            const last = data[data.length - 1];
+            nextCursor = { [orderColumn]: last[orderColumn], [tieColumn]: last[tieColumn] };
+        }
+
+        return {
+            data,
+            meta: {
+                perPage: size,
+                hasNext,
+                nextCursor
+            }
+        };
+    }
 }
 
 /**
@@ -256,6 +400,7 @@ module.exports = {
     QueryBuilder,
     assertIdentifier,
     assertJoinCondition,
+    assertRawSql,
     normalizeOperator,
     IDENTIFIER_PATTERN,
     JOIN_TYPES

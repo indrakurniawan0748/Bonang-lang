@@ -21,6 +21,9 @@ export class ProductRepository {
 
     /**
      * Buat tabel beserta indeks yang dibutuhkan.
+     *
+     * Kolom `deleted_at` dipakai untuk soft delete: produk yang dihapus
+     * tetap tersimpan di tabel, tapi tidak muncul di query biasa.
      */
     async ensureSchema() {
         await this.pool.execute(`
@@ -31,7 +34,8 @@ export class ProductRepository {
                 price REAL NOT NULL DEFAULT 0,
                 stock INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
+                updated_at TEXT NOT NULL,
+                deleted_at TEXT
             )
         `);
         await this.pool.execute(
@@ -40,15 +44,24 @@ export class ProductRepository {
         await this.pool.execute(
             "CREATE INDEX IF NOT EXISTS idx_products_updated_at ON products (updated_at)"
         );
+        await this.pool.execute(
+            "CREATE INDEX IF NOT EXISTS idx_products_deleted_at ON products (deleted_at)"
+        );
     }
 
     /**
      * Ambil semua produk, dengan pencarian dan paginasi opsional.
+     *
+     * Produk yang sudah dihapus (soft delete) tidak dikembalikan kecuali
+     * `options.includeDeleted` bernilai true.
      */
     async findAll(options = {}) {
         const filters = [];
         const params = [];
 
+        if (!options.includeDeleted) {
+            filters.push("deleted_at IS NULL");
+        }
         if (options.search) {
             filters.push("(name LIKE ? OR description LIKE ?)");
             const pattern = `%${options.search}%`;
@@ -87,10 +100,16 @@ export class ProductRepository {
 
     /**
      * Ambil satu produk berdasarkan id.
+     *
+     * `options.includeDeleted` meloloskan produk yang sudah dihapus —
+     * dipakai saat sinkronisasi offline perlu memeriksa versi lama.
      */
-    async findById(id) {
+    async findById(id, options = {}) {
+        const condition = options.includeDeleted
+            ? 'id = ?'
+            : 'id = ? AND deleted_at IS NULL';
         const row = await this.pool.queryOne(
-            `SELECT * FROM ${this.table} WHERE id = ?`,
+            `SELECT * FROM ${this.table} WHERE ${condition}`,
             [Number(id)]
         );
         return row ? this.toProduct(row) : null;
@@ -101,7 +120,7 @@ export class ProductRepository {
      */
     async findByName(name) {
         const rows = await this.pool.query(
-            `SELECT * FROM ${this.table} WHERE name = ? ORDER BY id`,
+            `SELECT * FROM ${this.table} WHERE name = ? AND deleted_at IS NULL ORDER BY id`,
             [String(name)]
         );
         return rows.map((row) => this.toProduct(row));
@@ -140,7 +159,7 @@ export class ProductRepository {
         await this.pool.execute(
             `UPDATE ${this.table}
              SET name = ?, description = ?, price = ?, stock = ?, updated_at = ?
-             WHERE id = ?`,
+             WHERE id = ? AND deleted_at IS NULL`,
             [data.name, data.description, data.price, data.stock, new Date().toISOString(), Number(id)]
         );
 
@@ -148,9 +167,35 @@ export class ProductRepository {
     }
 
     /**
-     * Hapus produk.
+     * Hapus produk (soft delete).
+     *
+     * Baris tidak dihapus dari tabel — kolom `deleted_at` diisi. Data
+     * masih bisa dipulihkan lewat `restore()`, dan tidak hilang saat
+     * perangkat offline melakukan sinkronisasi.
      */
     async remove(id) {
+        const result = await this.pool.execute(
+            `UPDATE ${this.table} SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL`,
+            [new Date().toISOString(), Number(id)]
+        );
+        return result.changes > 0;
+    }
+
+    /**
+     * Kembalikan produk yang sebelumnya dihapus.
+     */
+    async restore(id) {
+        const result = await this.pool.execute(
+            `UPDATE ${this.table} SET deleted_at = NULL WHERE id = ?`,
+            [Number(id)]
+        );
+        return result.changes > 0;
+    }
+
+    /**
+     * Hapus produk secara permanen.
+     */
+    async purge(id) {
         const result = await this.pool.execute(
             `DELETE FROM ${this.table} WHERE id = ?`,
             [Number(id)]
@@ -165,10 +210,10 @@ export class ProductRepository {
         const totals = await this.pool.queryOne(
             `SELECT COUNT(*) AS total, COALESCE(SUM(price * stock), 0) AS inventory_value,
                     COALESCE(SUM(stock), 0) AS total_stock
-             FROM ${this.table}`
+             FROM ${this.table} WHERE deleted_at IS NULL`
         );
         const lowStock = await this.pool.query(
-            `SELECT * FROM ${this.table} WHERE stock < 10 ORDER BY stock ASC LIMIT 5`
+            `SELECT * FROM ${this.table} WHERE stock < 10 AND deleted_at IS NULL ORDER BY stock ASC LIMIT 5`
         );
         return {
             total: totals ? totals.total : 0,
@@ -189,7 +234,8 @@ export class ProductRepository {
             price: Number(row.price),
             stock: Number(row.stock),
             createdAt: row.created_at,
-            updatedAt: row.updated_at
+            updatedAt: row.updated_at,
+            deletedAt: row.deleted_at || null
         };
     }
 }

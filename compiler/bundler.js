@@ -55,41 +55,107 @@ const CLIENT_RUNTIME_MODULE_ID = '__bng_client_runtime';
 /**
  * Muat graf modul dari entry point.
  *
+ * Graf modul bisa **siklik**: A mengimpor B, B mengimpor A. Traversal
+ * naive (visit → visit → visit → ...) tidak pernah berhenti dan berakhir
+ * dengan stack overflow. Modul yang sedang diproses ditandai lebih dulu
+ * sehingga siklus dikenali dan tidak diulang.
+ *
  * @returns {Map<string, {source: string, deps: Map<string,string>}>}
  */
 function collectModules(entryPath, compiler) {
     const modules = new Map();
 
-    const visit = (filePath) => {
+    const visit = (filePath, stack = []) => {
         const resolved = path.resolve(filePath);
         if (modules.has(resolved)) return resolved;
+
+        // Modul sudah ada di stack Means sedang diproses — ini siklus.
+        // Modul ini tetap akan dimasukkan ke peta modul, jadi tidak ada
+        // rekursi tak terbatas.
+        if (stack.includes(resolved)) {
+            return resolved;
+        }
 
         const source = fs.readFileSync(resolved, 'utf8');
         const ast = compiler.parse(source, resolved);
         const deps = new Map();
 
-        for (const statement of ast.body) {
-            if (statement.type !== 'ImportDeclaration') continue;
-            const spec = statement.source;
+        // Daftarkan modul SEBELUM membaca dependensinya supaya modul
+        // yang mengimpor modul ini (siklus) tidak memaksa traversal
+        // tak terbatas.
+        modules.set(resolved, { source, deps, path: resolved });
 
-            if (isBareSpecifier(spec)) {
-                deps.set(spec, spec);
+        for (const statement of ast.body) {
+            if (statement.type === 'ImportDeclaration') {
+                const spec = statement.source;
+
+                if (isBareSpecifier(spec)) {
+                    deps.set(spec, spec);
+                    continue;
+                }
+                const target = resolveRelative(resolved, spec);
+                if (!target) {
+                    throw new Error(`Modul tidak ditemukan: ${spec} (dari ${resolved})`);
+                }
+                deps.set(spec, target);
+                visit(target, [...stack, resolved]);
                 continue;
             }
-            const target = resolveRelative(resolved, spec);
-            if (!target) {
-                throw new Error(`Modul tidak ditemukan: ${spec} (dari ${resolved})`);
+
+            // Dynamic import (`import("./x.bng")`) — path-nya harus literal
+            // supaya bisa ditemukan saat build. Modul ikut dimuat ke bundel
+            // dan panggilan ditulis ulang menjadi `__bngRequire`.
+            const dynamic = collectDynamicImports(statement);
+            for (const spec of dynamic) {
+                if (isBareSpecifier(spec)) {
+                    deps.set(spec, spec);
+                    continue;
+                }
+                const target = resolveRelative(resolved, spec);
+                if (!target) {
+                    throw new Error(`Modul tidak ditemukan: ${spec} (dari ${resolved})`);
+                }
+                deps.set(spec, target);
+                visit(target, [...stack, resolved]);
             }
-            deps.set(spec, target);
-            visit(target);
         }
 
-        modules.set(resolved, { source, deps, path: resolved });
         return resolved;
     };
 
     visit(entryPath);
     return modules;
+}
+
+/**
+ * Kumpulkan path dari ekspresi `import("...")` di dalam sebuah node AST.
+ *
+ * Path harus berupa string literal — kalau tidak, nilainya tidak bisa
+ * diketahui saat build dan modul tidak bisa dimuat ke bundel.
+ */
+function collectDynamicImports(node, found = []) {
+    if (!node || typeof node !== 'object') return found;
+
+    if (node.type === 'ImportExpression') {
+        const source = node.source;
+        if (!source || source.type !== 'Literal' || typeof source.value !== 'string') {
+            throw new Error(
+                'import() hanya menerima string literal — path modul harus diketahui saat build'
+            );
+        }
+        found.push(source.value);
+    }
+
+    for (const key of Object.keys(node)) {
+        if (key === 'type' || key === 'line' || key === 'column') continue;
+        const value = node[key];
+        if (Array.isArray(value)) {
+            for (const item of value) collectDynamicImports(item, found);
+        } else if (value && typeof value === 'object') {
+            collectDynamicImports(value, found);
+        }
+    }
+    return found;
 }
 
 /**
@@ -156,6 +222,11 @@ function bundle(options = {}) {
         // Loader browser: tidak ada `require` sama sekali. Modul runtime
         // client di-inline sebagai modul internal supaya frontend tidak
         // butuh file tambahan maupun loader eksternal.
+        //
+        // Modul didaftarkan ke cache SEBELUM factory-nya dijalankan, supaya
+        // siklus modul (A -> B -> A) tidak menyebabkan rekursi tak
+        // terbatas. Pada siklus, exports yang dikembalikan masih kosong —
+        // sama seperti perilaku CommonJS.
         parts.push(`
 function __bngRequire(id) {
     if (__bngCache[id]) return __bngCache[id].exports;
@@ -196,6 +267,10 @@ function __bngRequire(id) {
 
         // Tulis ulang specifier import menjadi id modul internal.
         code = rewriteRequires(code, info.deps, ids, isClient);
+
+        // Dynamic import ditulis ulang menjadi pemanggilan loader internal.
+        // Hasilnya tetap Promise, jadi kode sumber tidak perlu berubah.
+        code = rewriteDynamicImports(code, info.deps, ids, isClient);
 
         if (isClient) {
             // Parameter `require` sengaja TIDAK diberikan di bundel
@@ -320,6 +395,54 @@ function rewriteRequires(code, deps, ids, isClient = false) {
 }
 
 /**
+ * Tulis ulang dynamic import menjadi pemanggilan loader internal bundel.
+ *
+ * `_$$dynamicImport("./x.bng")` menjadi
+ * `Promise.resolve(__bngRequire("__bng_3"))` supaya modul yang diimpor
+ * secara dinamis ikut terisi di dalam bundel.
+ */
+function rewriteDynamicImports(code, deps, ids, isClient = false) {
+    return code.replace(/_\$\$dynamicImport\((['"])([^'"]+)\1\)/g, (match, quote, spec) => {
+        const target = deps.get(spec);
+        if (!target) {
+            if (isClient) {
+                throw new Error(
+                    `Modul '${spec}' tidak bisa dipakai di bundel browser. ` +
+                    `Frontend tidak punya akses modul Node.`
+                );
+            }
+            return match;
+        }
+
+        if (isBareSpecifier(spec)) {
+            if (isClient) {
+                if (spec === CLIENT_MODULE_ID) {
+                    return `Promise.resolve(__bngRequire(${JSON.stringify(CLIENT_RUNTIME_MODULE_ID)}))`;
+                }
+                if (NODE_BUILTIN_PATTERN.test(spec)) {
+                    throw new Error(
+                        `Modul Node '${spec}' tidak boleh dipakai di bundel browser. ` +
+                        `Pindahkan logika ini ke sisi server.`
+                    );
+                }
+                throw new Error(
+                    `Paket '${spec}' tidak bisa dipakai di bundel browser. ` +
+                    `Bundel frontend hanya boleh memakai modul Bonang relatif ` +
+                    `dan modul 'bonang/client'.`
+                );
+            }
+            if (spec === RUNTIME_MODULE_ID) return 'Promise.resolve(require("./bonang-runtime.js"))';
+            if (spec === CLIENT_MODULE_ID) return 'Promise.resolve(require("./bonang-client.js"))';
+            if (spec === STD_MODULE_ID) return 'Promise.resolve(require("./bonang-std.js"))';
+            return match;
+        }
+
+        const id = ids.get(target);
+        return id ? `Promise.resolve(__bngRequire(${JSON.stringify(id)}))` : match;
+    });
+}
+
+/**
  * Baca sumber runtime client untuk di-inline-kan ke bundel browser.
  *
  * Runtime client ditulis sebagai UMD: `module.exports = factory()` bila
@@ -410,6 +533,8 @@ module.exports = {
     resolveRelative,
     copyRuntime,
     rewriteRequires,
+    rewriteDynamicImports,
+    collectDynamicImports,
     readClientRuntimeSource,
     CLIENT_RUNTIME_MODULE_ID
 };
