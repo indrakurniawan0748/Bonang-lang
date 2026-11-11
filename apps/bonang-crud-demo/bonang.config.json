@@ -1,0 +1,16 @@
+{
+  "name": "bonang-crud-demo",
+  "version": "1.0.0",
+  "port": 3000,
+  "entry": "src/server/main.bng",
+  "clientEntry": "src/client/main.bng",
+  "routes": "src/server/main.bng",
+  "static": "public",
+  "database": {
+    "driver": "sqlite",
+    "file": "data/bonang_demo.db"
+  },
+  "build": {
+    "outDir": "dist"
+  }
+}

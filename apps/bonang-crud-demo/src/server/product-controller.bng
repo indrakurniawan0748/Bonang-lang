@@ -1,0 +1,185 @@
+// Lapisan controller: menerjemahkan request HTTP menjadi panggilan service.
+//
+// Controller tidak memuat aturan bisnis maupun query SQL — ia hanya
+// memvalidasi bentuk input, memanggil service, dan membentuk respons.
+
+import { ValidationError } from "bonang";
+
+export class ProductController {
+    constructor(service) {
+        this.service = service;
+    }
+
+    /**
+     * Daftarkan seluruh route produk pada router.
+     */
+    registerRoutes(router) {
+        router.get("/api/products", (ctx) => this.index(ctx));
+        router.get("/api/products/summary", (ctx) => this.summary(ctx));
+        router.get("/api/products/:id", (ctx) => this.show(ctx));
+        router.post("/api/products", (ctx) => this.store(ctx));
+        router.put("/api/products/:id", (ctx) => this.update(ctx));
+        router.delete("/api/products/:id", (ctx) => this.destroy(ctx));
+
+        // Endpoint sinkronisasi untuk client offline.
+        router.post("/api/sync", (ctx) => this.sync(ctx));
+        return router;
+    }
+
+    /**
+     * GET /api/products
+     */
+    async index(ctx) {
+        const query = ctx.query || {};
+        const result = await this.service.list({
+            search: query.search || null,
+            limit: query.limit,
+            offset: query.offset
+        });
+        return {
+            status: "success",
+            data: result.items,
+            meta: {
+                total: result.total,
+                limit: result.limit,
+                offset: result.offset
+            }
+        };
+    }
+
+    /**
+     * GET /api/products/summary
+     */
+    async summary(ctx) {
+        return {
+            status: "success",
+            data: await this.service.summary()
+        };
+    }
+
+    /**
+     * GET /api/products/:id
+     */
+    async show(ctx) {
+        const id = this.parseId(ctx.params.id);
+        const product = await this.service.get(id);
+        return { status: "success", data: product };
+    }
+
+    /**
+     * POST /api/products
+     */
+    async store(ctx) {
+        const body = this.readBody(ctx);
+        const product = await this.service.create(body);
+        ctx.response.status(201);
+        return { status: "success", data: product };
+    }
+
+    /**
+     * PUT /api/products/:id
+     */
+    async update(ctx) {
+        const id = this.parseId(ctx.params.id);
+        const body = this.readBody(ctx);
+        const baseVersion = ctx.query ? ctx.query.baseVersion : null;
+        const product = await this.service.update(id, body, { baseVersion });
+        return { status: "success", data: product };
+    }
+
+    /**
+     * DELETE /api/products/:id
+     */
+    async destroy(ctx) {
+        const id = this.parseId(ctx.params.id);
+        await this.service.remove(id);
+        return { status: "success", data: { id } };
+    }
+
+    /**
+     * POST /api/sync
+     *
+     * Menerima antrean operasi dari client offline. Setiap operasi
+     *.results contiene `{ id, op, payload, baseVersion }`.
+     *
+     * Operasi yang bentrok versi dikembalikan sebagai `conflict` agar
+     * client dapat meminta resolutions dari pengguna.
+     */
+    async sync(ctx) {
+        const body = this.readBody(ctx);
+        const operations = Array.isArray(body.operations) ? body.operations : [];
+        const results = [];
+
+        for (const operation of operations) {
+            const opId = operation.id;
+            try {
+                if (operation.op === "create") {
+                    const created = await this.service.create(operation.payload);
+                    results.push({ id: opId, status: "applied", server: created });
+                } else if (operation.op === "update") {
+                    const updated = await this.service.update(
+                        Number(operation.entityId),
+                        operation.payload,
+                        { baseVersion: operation.baseVersion }
+                    );
+                    results.push({ id: opId, status: "applied", server: updated });
+                } else if (operation.op === "delete") {
+                    await this.service.remove(Number(operation.entityId));
+                    results.push({ id: opId, status: "applied" });
+                } else {
+                    results.push({ id: opId, status: "failed", error: "Operasi tidak dikenal" });
+                }
+            } catch (err) {
+                if (err.code === "CONFLICT") {
+                    results.push({
+                        id: opId,
+                        status: "conflict",
+                        error: err.message,
+                        server: err.details ? err.details.server : null
+                    });
+                } else if (err.code === "VALIDATION_ERROR") {
+                    results.push({
+                        id: opId,
+                        status: "failed",
+                        error: err.message,
+                        details: err.details
+                    });
+                } else {
+                    results.push({ id: opId, status: "failed", error: err.message });
+                }
+            }
+        }
+
+        return {
+            status: "success",
+            data: {
+                results,
+                applied: results.filter((r) => r.status === "applied").length,
+                conflicted: results.filter((r) => r.status === "conflict").length,
+                failed: results.filter((r) => r.status === "failed").length
+            }
+        };
+    }
+
+    /**
+     * Ambil body request; menolak bila bukan object.
+     */
+    readBody(ctx) {
+        const body = ctx.body;
+        if (!body || typeof body !== "object" || Array.isArray(body)) {
+            throw new ValidationError("Body harus berupa object JSON");
+        }
+        return body;
+    }
+
+    /**
+     * Parse id dari path; id harus bilangan bulat positif.
+     */
+    parseId(raw) {
+        const id = Number(raw);
+        if (!Number.isInteger(id) || id <= 0) {
+            throw new ValidationError(`Id '${raw}' tidak valid`);
+        }
+        return id;
+    }
+}

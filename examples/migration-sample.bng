@@ -1,0 +1,16 @@
+// Contoh migrasi Bonang.
+// Dijalankan dengan: bonang migrate
+
+export fn up(tx) {
+    tx.execute(`
+        CREATE TABLE IF NOT EXISTS contoh (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            nama TEXT NOT NULL,
+            dibuat_pada TEXT NOT NULL
+        )
+    `);
+}
+
+export fn down(tx) {
+    tx.execute("DROP TABLE IF EXISTS contoh");
+}

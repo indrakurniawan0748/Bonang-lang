@@ -1,0 +1,33 @@
+{
+  "name": "bonang-lang",
+  "version": "0.1.0",
+  "description": "Bonang — Browser Optimized Network And Native Graphics. Full-stack programming language: transpiler, runtime, CLI, standard library, and offline-first tooling.",
+  "type": "commonjs",
+  "bin": {
+    "bonang": "cli/cli.js"
+  },
+  "main": "runtime/index.js",
+  "scripts": {
+    "test": "node --test \"tests/unit/*.test.js\" \"tests/integration/*.test.js\" \"tests/regression/*.test.js\" \"tests/offline/*.test.js\" \"tests/concurrency/*.test.js\" \"tests/database/*.test.js\" \"tests/security/*.test.js\" \"tests/tools/*.test.js\"",
+    "test:all": "node --test \"tests/**/*.test.js\"",
+    "lint": "node cli/cli.js lint",
+    "audit": "node cli/cli.js audit",
+    "bench": "node cli/cli.js bench",
+    "build": "node cli/cli.js build"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "keywords": [
+    "bonang",
+    "compiler",
+    "transpiler",
+    "runtime",
+    "language",
+    "fullstack",
+    "offline-first"
+  ],
+  "license": "MIT",
+  "dependencies": {},
+  "devDependencies": {}
+}

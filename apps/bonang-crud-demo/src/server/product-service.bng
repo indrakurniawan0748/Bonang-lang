@@ -1,0 +1,100 @@
+// Lapisan service: aturan bisnis produk.
+//
+// Service tidak tahu-menahu database maupun HTTP — ia hanya menerima
+// repository dan mengembalikan data atau melempar error terstruktur.
+
+import { validateProduct } from "../shared/product.bng";
+import { ValidationError, NotFoundError, ConflictError } from "bonang";
+
+export class ProductService {
+    constructor(repository) {
+        this.repository = repository;
+    }
+
+    /**
+     * Daftar produk dengan paginasi dan filter.
+     */
+    list(options = {}) {
+        return this.repository.findAll(options);
+    }
+
+    /**
+     * Ambil satu produk; melempar NotFoundError bila tidak ada.
+     */
+    async get(id) {
+        const product = await this.repository.findById(id);
+        if (!product) {
+            throw new NotFoundError(`Produk dengan id ${id} tidak ditemukan`);
+        }
+        return product;
+    }
+
+    /**
+     * Buat produk baru setelah validasi.
+     */
+    async create(input) {
+        const errors = validateProduct(input);
+        if (Object.keys(errors).length > 0) {
+            throw new ValidationError("Data produk tidak valid", errors);
+        }
+        return this.repository.create(input);
+    }
+
+    /**
+     * Perbarui produk. `baseVersion` dipakai untuk deteksi konflik saat
+     * sinkronisasi offline: bila `updated_at` di server lebih baru dari
+     * versi yang pernah dilihat client, update ditolak sebagai konflik.
+     */
+    async update(id, input, options = {}) {
+        const current = await this.repository.findById(id);
+        if (!current) {
+            throw new NotFoundError(`Produk dengan id ${id} tidak ditemukan`);
+        }
+
+        if (options.baseVersion && options.baseVersion !== current.updatedAt) {
+            throw new ConflictError(
+                `Produk ${id} sudah diubah di server sejak versi ${options.baseVersion}`,
+                { server: current, baseVersion: options.baseVersion }
+            );
+        }
+
+        // Update bersifat parsial: field yang tidak dikirim memakai nilai
+        // saat ini. Validasi dijalankan atas hasil penggabungan, bukan atas
+        // payload parsial — kalau tidak, update satu field selalu gagal
+        // karena field lain dianggap kosong.
+        const merged = {
+            name: input.name !== undefined ? input.name : current.name,
+            description: input.description !== undefined ? input.description : current.description,
+            price: input.price !== undefined ? input.price : current.price,
+            stock: input.stock !== undefined ? input.stock : current.stock
+        };
+
+        const errors = validateProduct(merged);
+        if (Object.keys(errors).length > 0) {
+            throw new ValidationError("Data produk tidak valid", errors);
+        }
+        return this.repository.update(id, merged);
+    }
+
+    /**
+     * Hapus produk.
+     */
+    async remove(id) {
+        const existing = await this.repository.findById(id);
+        if (!existing) {
+            throw new NotFoundError(`Produk dengan id ${id} tidak ditemukan`);
+        }
+        const removed = await this.repository.remove(id);
+        if (!removed) {
+            throw new NotFoundError(`Produk dengan id ${id} gagal dihapus`);
+        }
+        return true;
+    }
+
+    /**
+     * Ringkasan inventaris.
+     */
+    summary() {
+        return this.repository.summary();
+    }
+}

@@ -1,0 +1,16 @@
+// Entry point server Bonang CRUD Demo.
+//
+// Dijalankan dengan: bonang dev  (atau `node dist/server.js` setelah build)
+
+import { startApp } from "./app.bng";
+
+const port = 3000;
+const databaseFile = "data/bonang_demo.db";
+
+async fn main() {
+    const app = await startApp({ port, host: "127.0.0.1", databaseFile });
+    console.log("Bonang CRUD Demo berjalan di http://localhost:" + port);
+    return app;
+}
+
+export { main };

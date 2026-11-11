@@ -1,0 +1,103 @@
+// Model domain bersama antara server dan client.
+//
+// Tipe dan aturan validasi dipakai kedua sisi agar client bisa memvalidasi
+// sebelum melakukan round-trip ke server.
+
+export const MAX_NAME_LENGTH = 120;
+export const MAX_DESCRIPTION_LENGTH = 1000;
+export const MAX_STOCK = 1000000;
+export const MIN_PRICE = 0;
+
+/**
+ * Aturan validasi produk.
+ *
+ * Dipakai server (sebagai sumber kebenaran) dan client (sebagai validasi
+ * optimistis sebelum enqueue ke sync queue).
+ */
+export const productRules = {
+    name: {
+        required: true,
+        minLength: 1,
+        maxLength: MAX_NAME_LENGTH,
+        label: "Nama produk"
+    },
+    description: {
+        required: false,
+        maxLength: MAX_DESCRIPTION_LENGTH,
+        label: "Deskripsi"
+    },
+    price: {
+        required: true,
+        type: "number",
+        min: MIN_PRICE,
+        label: "Harga"
+    },
+    stock: {
+        required: true,
+        type: "number",
+        min: 0,
+        max: MAX_STOCK,
+        label: "Stok"
+    }
+};
+
+/**
+ * Validasi payload produk.
+ * Kembalikan objek berisi daftar error per field.
+ */
+export fn validateProduct(input) {
+    const errors = {};
+    const data = input || {};
+
+    for (const field of Object.keys(productRules)) {
+        const rule = productRules[field];
+        const value = data[field];
+
+        if (rule.required && (value === undefined || value === null || value === "")) {
+            errors[field] = rule.label + " wajib diisi";
+            continue;
+        }
+        if (value === undefined || value === null || value === "") continue;
+
+        if (rule.type === "number") {
+            const num = Number(value);
+            if (!Number.isFinite(num)) {
+                errors[field] = rule.label + " harus berupa angka";
+                continue;
+            }
+            if (rule.min !== undefined && num < rule.min) {
+                errors[field] = rule.label + " minimal " + rule.min;
+                continue;
+            }
+            if (rule.max !== undefined && num > rule.max) {
+                errors[field] = rule.label + " maksimal " + rule.max;
+                continue;
+            }
+        }
+
+        const text = String(value);
+        if (rule.minLength !== undefined && text.length < rule.minLength) {
+            errors[field] = rule.label + " minimal " + rule.minLength + " karakter";
+            continue;
+        }
+        if (rule.maxLength !== undefined && text.length > rule.maxLength) {
+            errors[field] = rule.label + " maksimal " + rule.maxLength + " karakter";
+            continue;
+        }
+    }
+
+    return errors;
+}
+
+/**
+ * Normalisasi bentuk produk sebelum disimpan.
+ */
+export fn normalizeProduct(input) {
+    const data = input || {};
+    return {
+        name: String(data.name || "").trim(),
+        description: String(data.description || "").trim(),
+        price: Number(data.price) || 0,
+        stock: Number(data.stock) || 0
+    };
+}

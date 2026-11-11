@@ -1,0 +1,126 @@
+// Fixture untuk menguji lexer + parser Bonang.
+// File ini sengaja mencakup fitur inti: variabel, template literal, fungsi,
+// class dengan OOP, arrow function, loop, try/catch, dan import/export.
+
+import { helper } from "./helpers.bng";
+
+const MAX_ITEMS = 100;
+let counter = 0;
+let label = `Halo ${MAX_ITEMS} item`;
+
+fn greet(name: string, greeting: string = "Hi"): string {
+    return greeting + " " + name;
+}
+
+fn sumAll(items: int[]): int {
+    let total = 0;
+    for (const item of items) {
+        total = total + item;
+    }
+    return total;
+}
+
+interface Shape {
+    area(): float;
+    title(): string;
+}
+
+abstract class Base {
+    protected id: int = 0;
+    public label: string = "base";
+
+    constructor(id: int) {
+        this.id = id;
+    }
+
+    describe(): string {
+        return "Base " + this.id;
+    }
+}
+
+class Product extends Base implements Shape {
+    public name: string;
+    private price: float = 0.0;
+    public stock: int = 0;
+
+    constructor(name: string, price: float) {
+        super(0);
+        this.name = name;
+        this.price = price;
+    }
+
+    area(): float {
+        return this.price;
+    }
+
+    title(): string {
+        return this.name;
+    }
+
+    get displayPrice(): float {
+        return this.price;
+    }
+
+    set displayPrice(value: float) {
+        this.price = value;
+    }
+
+    static empty(): Product {
+        return new Product("", 0.0);
+    }
+}
+
+enum Status {
+    Active,
+    Inactive,
+    Archived
+}
+
+type ProductId = int;
+
+const add = (a: int, b: int): int => a + b;
+const double = x => x * 2;
+
+async fn fetchAll(): Promise<int[]> {
+    let result = [];
+    result.push(1);
+    return result;
+}
+
+fn main() {
+    let products = [new Product("Kopi", 25000.0)];
+    let idx = 0;
+
+    while (idx < products.length) {
+        counter = counter + 1;
+        idx = idx + 1;
+    }
+
+    switch (counter) {
+        case 1:
+            console.log("satu");
+            break;
+        default:
+            console.log("lainnya");
+            break;
+    }
+
+    try {
+        helper();
+    } catch (err) {
+        console.error(err);
+    } finally {
+        console.log("selesai");
+    }
+
+    for (let i = 0; i < 10; i = i + 1) {
+        if (i % 2 === 0) {
+            continue;
+        }
+    }
+
+    const obj = { name: "Kopi", price: 25000, nested: { a: 1 } };
+    const arr = [1, 2, 3, ...products];
+
+    console.log(greet("Dunia"), add(1, 2), double(4), obj, arr, label);
+}

@@ -1,0 +1,20 @@
+{
+  "name": "bonang-crud-demo",
+  "version": "1.0.0",
+  "builtAt": "2026-11-11T05:17:30.408Z",
+  "minified": false,
+  "files": [
+    {
+      "file": "src/server/main.bng",
+      "out": "server.js",
+      "bytes": 17310,
+      "modules": 6
+    },
+    {
+      "file": "src/client/main.bng",
+      "out": "client.js",
+      "bytes": 15836,
+      "modules": 2
+    }
+  ]
+}

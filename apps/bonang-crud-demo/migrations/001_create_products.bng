@@ -1,0 +1,23 @@
+// Migrasi awal: tabel produk untuk Bonang CRUD Demo.
+
+export fn up(tx) {
+    tx.execute(`
+        CREATE TABLE IF NOT EXISTS products (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            description TEXT NOT NULL DEFAULT '',
+            price REAL NOT NULL DEFAULT 0,
+            stock INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+    `);
+    tx.execute("CREATE INDEX IF NOT EXISTS idx_products_name ON products (name)");
+    tx.execute("CREATE INDEX IF NOT EXISTS idx_products_updated_at ON products (updated_at)");
+}
+
+export fn down(tx) {
+    tx.execute("DROP INDEX IF EXISTS idx_products_updated_at");
+    tx.execute("DROP INDEX IF EXISTS idx_products_name");
+    tx.execute("DROP TABLE IF EXISTS products");
+}
