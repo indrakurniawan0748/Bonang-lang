@@ -138,8 +138,32 @@ export const x = 1;
 export default fn main() { ... }
 ```
 
-Bentuk deklarasi tunggal yang didukung. Named export list (`export { a, b }`)
-belum didukung (lihat Known Limitations).
+Bentuk deklarasi tunggal yang didukung. Named export list
+(`export { a, b as c }`) juga didukung — lihat §3.2.1.
+
+### 3.2.1 Named Export List
+
+```
+const a = 1;
+const b = 2;
+
+export { a, b as c };
+```
+
+Modul yang mengimpor hasil ekspor tersebut:
+
+```
+import { a, c } from "./modulo.bng";
+```
+
+| Bentuk | Makna |
+| --- | --- |
+| `export { a }` | Ekspor `a` dengan nama `a`. |
+| `export { a as c }` | Ekspor `a` dengan nama `c` di modul ini. |
+
+Bila `a` berasal dari `import`, nilai yang diekspor adalah nilai modul
+asal — bukan binding lokal yang belum terisi. Ini yang membuat
+re-export bekerja pada siklus modul.
 
 ### 3.3 Namespace
 
@@ -423,7 +447,6 @@ server fn main() {
 - Anotasi tipe tidak ditegakkan.
 - `interface` dan `implements` tidak diverifikasi.
 - Generic dan tipe parameterik belum ada.
-- Named export list belum ada.
 - Dotted namespace belum ada.
 - Modul built-in `bonang` diekspos lewat bridge JS (lihat
   `docs/COMPILER_DESIGN.md`).

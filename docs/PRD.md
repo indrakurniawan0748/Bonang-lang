@@ -124,7 +124,7 @@ XSS, path traversal, route tanpa validasi, dan secret di config.
 - Bundler menghasilkan file JS mandiri.
 - CLI: `init`, `run`, `build`, `dev`, `test`, `lint`, `audit`, `bench`,
   `migrate`, `version`.
-- Linter (9 aturan), auditor keamanan (6 pemeriksaan), benchmark (5
+- Linter (9 aturan), auditor keamanan (8 pemeriksaan), benchmark (5
   skenario), runner migrasi.
 
 **Runtime**
@@ -153,7 +153,7 @@ XSS, path traversal, route tanpa validasi, dan secret di config.
 | ID | Kebutuhan | Ukuran / Ambang | Cara verifikasi |
 | --- | --- | --- | --- |
 | NFR-01 | Build tanpa dependensi eksternal | 0 dependency | `package.json` kosong; `npm install` tidak perlu |
-| NFR-02 | Test suite hijau | 100% pass | `node --test` pada 7 direktori test |
+| NFR-02 | Test suite hijau | 100% pass | `node --test` pada 8 direktori test (356 test) |
 | NFR-03 | Latensi p95 pada 1000 request konkuren | < 1000 ms | `tests/concurrency` |
 | NFR-04 | Tidak ada SQL injection | 0 jalur | `tests/database`, `tests/security` |
 | NFR-05 | Error runtime tidak membocorkan stack ke produksi | 0 insiden | `handleError` + `BONANG_ENV` gate |

@@ -13,7 +13,7 @@ bukan estimasi.
 
 ## 1. Ringkasan
 
-Angka di bawah berasal dari **satu** eksekusi `bonang bench` (04:46 UTC,
+Angka di bawah berasal dari **satu** eksekusi `bonang bench` (07:43 UTC,
 11 Nov 2026). Karena benchmark pada mesin yang sama memberi variance
 antar-jalankan yang besar (§8.3), tabel ini adalah **snapshot satu
 eksekusi**, bukan rata-rata. Rangkuman rentang antar-jalankan ada di
@@ -21,20 +21,21 @@ eksekusi**, bukan rata-rata. Rangkuman rentang antar-jalankan ada di
 
 | Skenario | Metrik | Nilai (eksekusi 04:46 UTC) |
 | --- | --- | --- |
-| Kompilasi | throughput | **4 932** batch/detik |
-| Eksekusi | throughput | **1 919 386** operasi/detik |
-| Baseline Node | throughput | 2 710 027 operasi/detik |
-| Baseline Bonang | throughput | **2 873 563** operasi/detik |
-| Baseline PHP | throughput | 339 785 operasi/detik |
-| Database insert | throughput | **962** operasi/detik |
-| Database select | throughput | **4 481** operasi/detik |
-| HTTP sekuensial (300 req) | mean | 411,569 ms |
-| HTTP konkuren (50 req) | mean | **71,765 ms** |
-| HTTP non-blocking check | fast request | **2,125 ms** (lulus) |
-| Rasio Bonang vs Node | - | **1,06x** |
+| Kompilasi | throughput | **6 081** batch/detik |
+| Eksekusi | throughput | **1 934 236** operasi/detik |
+| Baseline Node | throughput | 2 403 846 operasi/detik |
+| Baseline Bonang | throughput | **2 941 176** operasi/detik |
+| Baseline PHP | throughput | 293 083 operasi/detik |
+| Database insert | throughput | **1 108** operasi/detik |
+| Database select | throughput | **4 440** operasi/detik |
+| HTTP sekuensial (300 req) | mean | 416,148 ms |
+| HTTP konkuren (50 req) | mean | **75,209 ms** |
+| HTTP non-blocking check | fast request | **2,156 ms** (lulus) |
+| Rasio Bonang vs Node | - | **1,22x** |
 
 > **Tidak ada klaim "Bonang lebih cepat" tanpa bukti pengukuran.**
-> Rasio 1,06x berarti Bonang berada dikisaran yang **sama** dengan
+> Rasio 1,22x pada eksekusi ini (rentang 1,05x - 1,22x antar-jalankan)
+> berarti Bonang berada dikisaran yang **sama** dengan
 > JavaScript mentah. Ini wajar, karena Bonang adalah transpiler ke
 > JavaScript dan tidak menambah lapisan abstraksi saat runtime.
 > Yang terbukti adalah **paritas** dengan baseline Node, dan urutan
@@ -48,14 +49,14 @@ Pengukuran: batch 200 file Bonang, 5 sampel.
 
 | Metrik | Nilai (ms per batch) |
 | --- | --- |
-| min | 27,297 |
-| p50 | 34,568 |
-| p95 | 72,741 |
-| p99 | 72,741 |
-| max | 72,741 |
-| mean | 40,552 |
+| min | 19,349 |
+| p50 | 29,204 |
+| p95 | 65,114 |
+| p99 | 65,114 |
+| max | 65,114 |
+| mean | 32,891 |
 
-**Throughput: 4 932 batch/detik.**
+**Throughput: 6 081 batch/detik.**
 
 Pipeline yang diukur: lexer -> parser -> AST -> codegen -> bundle.
 Belum termasuk penulisan berkas ke disk.
@@ -68,14 +69,14 @@ Pengukuran: 1000 iterasi fungsi aritmetika murni, 5 sampel.
 
 | Metrik | Nilai (ms per batch) |
 | --- | --- |
-| min | 0,352 |
-| p50 | 0,367 |
-| p95 | 1,151 |
-| p99 | 1,151 |
-| max | 1,151 |
-| mean | 0,521 |
+| min | 0,364 |
+| p50 | 0,398 |
+| p95 | 1,046 |
+| p99 | 1,046 |
+| max | 1,046 |
+| mean | 0,517 |
 
-**Throughput: 1 919 386 operasi/detik.**
+**Throughput: 1 934 236 operasi/detik.**
 
 ---
 
@@ -85,22 +86,23 @@ Skenario identik: loop aritmetika 1000 iterasi, 5 sampel (PHP 1 sampel).
 
 | Runtime | mean (ms) | Throughput (op/detik) |
 | --- | --- | --- |
-| Node.js | 0,369 | 2 710 027 |
-| **Bonang** | **0,348** | **2 873 563** |
-| PHP 8.2.12 | 2,943 | 339 785 |
+| Node.js | 0,416 | 2 403 846 |
+| **Bonang** | **0,340** | **2 941 176** |
+| PHP 8.2.12 | 3,412 | 293 083 |
 
-**Rasio Bonang vs Node: 1,06x.**
+**Rasio Bonang vs Node: 1,22x.**
 
 Catatan yang jujur:
 
-1. **Bonang hanya 6% lebih cepat dari Node mentah** — dan selisih ini
-   berada di dalam rentang noise antar-jalankan. Yang terbukti adalah
-   *paritas*, bukan kemenangan.
+1. **Selisih Bonang vs Node mentah berada di dalam rentang noise
+   antar-jalankan.** Pada eksekusi ini rasionya 1,22x, pada eksekusi
+   sebelumnya 1,06x dan 1,05x. Yang terbukti adalah *paritas*, bukan
+   kemenangan — lihat §8.3.
 2. Karena Bonang dikompilasi ke JavaScript, advantage struktural tidak
    mungkin diharapkan. Yang bisa diharapkan justru disadvantage — dan
    memang tidak terlihat signifikan, karena overhead transpilasi hanya
    terjadi sekali saat build.
-3. **PHP sekitar 8,5x lebih lambat** pada skenario komputasi murni. Ini
+3. **PHP sekitar 8,6x lebih lambat** pada skenario komputasi murni. Ini
    bukan kebaruan Bonang; PHP memang berjalan di interpreter yang
    restorative lebih lambat. Angka ini disertakan sebagai titik acuan
    skala, bukan sebagai argumen kemenangan Bonang.
@@ -115,8 +117,8 @@ Catatan yang jujur:
 
 | Operasi | mean (ms) | Throughput (op/detik) |
 | --- | --- | --- |
-| insert | 519,492 | 962 |
-| select | 111,593 | 4 481 |
+| insert | 451,254 | 1 108 |
+| select | 112,605 | 4 440 |
 
 Select sekitar 4,7x lebih cepat dari insert — wajar untuk SQLite: insert
 melibatkan penulisan ke WAL dan commit, sedangkan select hanya membaca
@@ -130,23 +132,23 @@ halaman yang sudah ter-cache.
 
 | Metrik | Nilai (ms) |
 | --- | --- |
-| min | 293,695 |
-| p50 | 345,780 |
-| p95 | 595,233 |
-| p99 | 595,233 |
-| max | 595,233 |
-| mean | 411,569 |
+| min | 284,397 |
+| p50 | 380,727 |
+| p95 | 583,319 |
+| p99 | 583,319 |
+| max | 583,319 |
+| mean | 416,148 |
 
 ### 6.2 Konkuren (50 request paralel)
 
 | Metrik | Nilai (ms) |
 | --- | --- |
-| min | 29,281 |
-| p50 | 92,056 |
-| p95 | 93,957 |
-| p99 | 93,957 |
-| max | 93,957 |
-| mean | 71,765 |
+| min | 32,645 |
+| p50 | 88,236 |
+| p95 | 104,747 |
+| p99 | 104,747 |
+| max | 104,747 |
+| mean | 75,209 |
 
 71,765 ms untuk 50 request yang berjalan paralel jauh lebih baik daripada
 411,569 ms untuk 300 request sekuensial. Rasio per-request: sekuensial
@@ -194,37 +196,38 @@ Throughput dihitung dari mean: `1000 / mean(detik)`.
 2. **Tidak ada insulation termal.** Benchmark dijalankan berurutan dalam
    satu proses, sehingga skenario berikutnya bisa mendapat mesin yang
    sudah hangat. Karena itu yang dibandingkan adalah **p50**, bukan max.
-3. **Varian antar-jalankan nyata.** Tiga eksekusi `bonang bench` pada
-   mesin yang sama menghasilkan compile throughput 8 486, 4 932, lalu
-   8 213 batch/detik; rasio Bonang vs Node 1,06x lalu 1,05x; HTTP
-   sekuensial 411,569 lalu 366,676 lalu 357,125 ms. Selisih ini besar,
-   dan itu alasan rasio kecil seperti 1,06x **tidak boleh**
-   touted sebagai keunggulan Bonang.
+3. **Varian antar-jalankan nyata.** Empat eksekusi `bonang bench` pada
+   mesin yang sama menghasilkan compile throughput 8 486, 4 932, 8 213,
+   lalu 6 081 batch/detik; rasio Bonang vs Node 1,06x, 1,05x, lalu
+   1,22x; HTTP sekuensial 411,569 / 366,676 / 357,125 / 416,148 ms.
+   Selisih ini besar, dan itu alasan rasio sekecil apa pun **tidak
+   boleh** touted sebagai keunggulan Bonang.
 
    Rentang yang teramati:
 
    | Metrik | Renderan teramati |
    | --- | --- |
-   | Compile throughput | 4 932 - 8 213 batch/detik |
-   | Rasio Bonang vs Node | 1,05x - 1,06x |
-   | HTTP sekuensial (300 req), mean | 357,125 - 411,569 ms |
-   | HTTP konkuren (50 req), mean | 67,993 - 71,765 ms |
-   | Non-blocking fast request | 1,944 - 2,125 ms |
-   | DB insert / select | 962 - 1 134 / 4 481 - 4 963 op/detik |
+   | Compile throughput | 4 932 - 8 486 batch/detik |
+   | Rasio Bonang vs Node | 1,05x - 1,22x |
+   | HTTP sekuensial (300 req), mean | 357,125 - 416,148 ms |
+   | HTTP konkuren (50 req), mean | 67,993 - 75,209 ms |
+   | Non-blocking fast request | 1,944 - 2,156 ms |
+   | DB insert / select | 962 - 1 134 / 4 440 - 4 963 op/detik |
 
    Karena rentang compile melintasi angka yang hampir dua kali lipat,
    **angka mana pun yang dipilih adalah pilihan arbitrer**. Yang
    ROBUST di antara semua eksekusi adalah: rasio Bonang vs Node tetap
-   dikisaran 1,05x - 1,06x (paritas), HTTP konkuren selalu ~4x lebih
-   cepat per-request daripada sekuensial (event loop tidak
-   men-serialize request), dan uji non-blocking selalu lulus.
+   dikisaran paritas (1,05x - 1,22x, semua di atas 1,00), HTTP konkuren
+   selalu ~4x lebih cepat per-request daripada sekuensial (event loop
+   tidak men-serialize request), dan uji non-blocking selalu lulus.
 4. **Baseline PHP satu sampel.** PHP lambat startup sehingga diukur
    terpisah tanpa menghitung startup.
 5. **Benchmark adalah mikro-benchmark.** Tidak mencakup I/O jaringan
    nyata, database terdistribusi, atau beban produksi.
 6. **Tidak ada klaim keunggulan.** Yang terbukti: **paritas** dengan
-   JavaScript, urutan magnitude di atas PHP pada komputasi murni, dan
-   perilaku non-blocking yang terverifikasi.
+   JavaScript (rasio selalu ≥ 1,00 di semua eksekusi), urutan magnitude
+   di atas PHP pada komputasi murni, dan perilaku non-blocking yang
+   terverifikasi.
 
 ---
 

@@ -277,17 +277,29 @@ ConnectionStatus → online
 
 ## 11. Pengujian
 
-`tests/offline/offline.test.js` — 13 test:
+`tests/offline/offline.test.js` — 28 test:
 
 - `IndexedDBStore`: open, put, get, getAll, delete, clear, putMany.
 - `SyncQueue`: enqueue, list, remove, clear, flush sukses, flush dengan
-  kegagalan.
+  kegagalan, flush pada antrean kosong tidak memanggil sender.
 - `resolveConflict`: remote lebih baru menang, local lebih baru menang,
-  timestamp sama, policy kustom.
+  entri tanpa `updated_at` tidak menimpa data server.
 - `reconcile`: entitas baru, entri sama, konflik tercatat.
 - `ConnectionStatus`: subscribe/unsubscribe, setOnline.
 - `apiFetch`: jalur offline mengembalikan `{ ok:false, offline:true }`
-  tanpa melempar.
+  tanpa melempar, memakai fallback bila disediakan, mengirim body JSON dan
+  mengembalikan data terparse.
+- Batas antrean: entri ditolak saat penuh, entri dengan `id` sama menimpa
+  tanpa melewati batas, batas default bernilai wajar, antrean bisa
+  ditambah lagi setelah entri dihapus.
+- Background sync: `registerBackgroundSync` mendaftarkan tag ke service
+  worker, melaporkan tidak didukung tanpa melempar, dan melaporkan galat
+  pendaftaran.
+- Sinkronisasi antar-tab: `BroadcastSync` mengirim pesan ke tab lain, tidak
+  mengirim ke dirinya sendiri, tetap bisa dibuat tanpa dukungan
+  `BroadcastChannel`; `linkQueueToBroadcast` menyiarkan perubahan antrean,
+  memberi tahu tab lain saat entri dihapus, memanggil `onRemoteChange`, dan
+  bisa dilepas mengembalikan antrean apa adanya.
 
 ---
 
@@ -295,9 +307,24 @@ ConnectionStatus → online
 
 1. Resolusi konflik di client LWW, bukan CRDT — edit satu perangkat bisa
    hilang bila dua perangkat offline mengedit entitas yang sama.
-2. Service worker belum punya strategi invalidasi cache yang rinci per-file.
-3. IndexedDB store tidak dienkripsi.
-4. Antrean sinkronisasi belum punya batas ukuran (bisa tumbuh tak terbatas
-   bila server terus gagal).
-5. Belum ada sinkronisasi background (hanya saat aplikasi aktif).
-6. Belum ada sinkronisasi antar-tabs (memerlukan BroadcastChannel).
+2. IndexedDB store tidak dienkripsi.
+3. Background Sync hanya didukung Chromium (L-32) — Firefox dan Safari
+   belum menerapkannya, jadi di browser non-Chromium sinkronisasi tetap
+   bergantung pada flush manual.
+4. `BroadcastChannel` hanya bekerja same-origin (L-33) — sinkronisasi
+   antar-tab lintas origin tidak bisa.
+
+Yang **sudah** ditangani:
+
+- **Invalidasi cache service worker per-file.** `bonang build` menghasilkan
+  `precache-manifest.json` (hash SHA-256 per aset) dan `CacheInvalidator`
+  menyediakan `prune`, `matchFresh`, dan `store` (L-20, BNG-043).
+- **Batas ukuran antrean sinkronisasi.** Default 500 operasi; operasi
+  melebihi batas ditolak dengan `QueueOverflowError`, dan hidrasi antrean
+  dari IndexedDB dihitung dalam batas itu (L-22, BNG-042).
+- **Sinkronisasi background.** `registerBackgroundSync()` mendaftarkan tag
+  ke `navigator.serviceWorker.sync` dan melaporkan status tanpa melempar
+  (L-23, BNG-046).
+- **Sinkronisasi antar-tab.** `BroadcastSync` + `linkQueueToBroadcast()`
+  menyiarkan perubahan antrean ke tab lain di origin yang sama
+  (L-24, BNG-047).

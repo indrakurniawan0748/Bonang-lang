@@ -57,17 +57,23 @@ Exit code 0.
 
 ### 2.1 Apa yang diperiksa
 
-Tujuh pemeriksaan, empat berbasis analisis AST:
+Delapan pemeriksaan, empat berbasis analisis AST:
 
 | Pemeriksaan | Metode |
 | --- | --- |
 | Hardcoded secret | Regex per baris (5 pola) |
 | SQL injection (gabungan `+`) | Regex per baris |
 | SQL injection (template literal) | AST |
+| SQL mentah pada `whereRaw`/`having` | AST |
 | XSS (`innerHTML`, `insertAdjacentHTML`, `document.write`) | Regex per baris |
 | Path traversal | Regex per baris |
 | Route mutating tanpa validasi | AST |
 | Secret di berkas konfigurasi | Isi `.env*`, `bonang.config.js`, `config.json` |
+
+Di kode `cli/auditor.js` method-nya ada 9 — kedelapan pemeriksaan di atas
+ditambah satu dispatcher (`checkAst`) yang memanggil tiga pemeriksaan
+berbasis AST. Angka yang dirujuk di dokumen ini selalu menghitung
+pemeriksaan daun, bukan dispatcher.
 
 ### 2.2 Akurasi auditor
 
@@ -191,8 +197,8 @@ mengunci hal ini, sehingga duplikasi tidak bisa masuk lagi.
 | --- | --- | --- |
 | `compiler/parser/parser.js` | 1309 | Pratt parser — terbesar; masih monolitik |
 | `compiler/codegen/generator.js` | 860 | Generator AST → JS |
-| `cli/auditor.js` | 854 | 7 aturan analisis |
-| `cli/cli.js` | 786 | 9 perintah CLI |
+| `cli/auditor.js` | 854 | 8 pemeriksaan keamanan |
+| `cli/cli.js` | 786 | 10 perintah CLI |
 | `runtime/http/server.js` | 759 | HTTP + router + aset statis |
 | `runtime/client/client.js` | 630 | Runtime browser |
 | `compiler/bundler.js` | 541 | Graf modul + IIFE |
@@ -423,26 +429,30 @@ Benchmark dijalankan lewat `node cli/cli.js bench` (1000 iterasi, 5 sampel).
 
 | Skenario | p50 | p95 | Throughput |
 | --- | --- | --- | --- |
-| Compile (200 iterasi/batch) | 20,1 ms | 50,4 ms | 8.157 batch/detik |
-| Execution (1000 iterasi/batch) | 0,219 ms | 1,164 ms | 2.450.980 op/detik |
-| Database insert (500 iterasi) | 396,1 ms | 520,9 ms | 1.167 op/detik |
-| Database select (500 iterasi) | 100,5 ms | 103,4 ms | 4.930 op/detik |
-| HTTP 50 request konkuren | 86,7 ms | 89,6 ms | — |
+| Compile (200 iterasi/batch) | 29,2 ms | 65,1 ms | 6.081 batch/detik |
+| Execution (1000 iterasi/batch) | 0,398 ms | 1,046 ms | 1.934.236 op/detik |
+| Database insert (500 iterasi) | 461,7 ms | 467,4 ms | 1.108 op/detik |
+| Database select (500 iterasi) | 110,6 ms | 118,6 ms | 4.440 op/detik |
+| HTTP 50 request konkuren | 88,2 ms | 104,7 ms | — |
 
 ### 5.1 Perbandingan bahasa dasar
 
 | Runtime | p50 | ops/detik |
 | --- | --- | --- |
-| Node.js v24.21.0 | 0,220 ms | 2.976.190 |
-| Bonang | 0,218 ms | 3.246.753 |
-| PHP (interpreter) | 2,979 ms | 335.679 |
+| Node.js v24.21.0 | 0,367 ms | 2.403.846 |
+| Bonang | 0,233 ms | 2.941.176 |
+| PHP (interpreter) | 3,412 ms | 293.083 |
 
-Rasio Bonang terhadap Node: **1,091×**. Karena Bonang mentranspilasi ke
-JavaScript lalu berjalan di V8 yang sama,-throughput execution praktis
-sama — yang membedakan adalah ergonomia bahasa, bukan kecepatan runtime.
-Yang perlu jujur dicatat: benchmark ini **tidak** mengukur waktu
-transpilasi di dalam loop, karena itu akan mengukur compiler, bukan
-program yang dikompilasi.
+Rasio Bonang terhadap Node: **1,22×** pada eksekusi ini. Rentang antar-jalankan
+adalah 1,05× – 1,22× — semuanya di atas 1,00, tapi selisihnya kecil
+dan berada di dalam noise mesin, jadi yang terbukti adalah **paritas**,
+bukan kecepatan lebih. Lihat `benchmarks/RESULTS.md` §8.3.
+
+Karena Bonang mentranspilasi ke JavaScript lalu berjalan di V8 yang sama,
+throughput execution praktis sama — yang membedakan adalah ergonomi
+bahasa, bukan kecepatan runtime. Yang perlu jujur dicatat: benchmark ini
+**tidak** mengukur waktu transpilasi di dalam loop, karena itu akan
+mengukur compiler, bukan program yang dikompilasi.
 
 ### 5.2 CPU, RAM, alokasi
 
@@ -461,13 +471,13 @@ Bukti bahwa runtime Bonang sendiri tidak memblokir event loop:
 
 ```
 nonBlockingCheck: {
-  fastRequestMs: 1.975,
+  fastRequestMs: 2.156,
   passed: true,
   note: "Request cepat harus selesai jauh sebelum request lambat (20ms) selesai"
 }
 ```
 
-Request cepat selesai di 1,975 ms sementara request lambat butuh 20 ms —
+Request cepat selesai di 2,156 ms sementara request lambat butuh 20 ms —
 event loop tidak terkunci.
 
 ### 5.4 Serialisasi yang tidak perlu

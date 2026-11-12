@@ -90,13 +90,21 @@ Status: `Ter mitigating`, `Ter mitigated`, `Diterima`, `Terbuka`.
 
 ## R-07 — Bundler belum menangani dynamic import dan circular dependency
 
-- **Probabilitas**: Sedang
-- **Dampak**: Sedang
-- **Deskripsi**: Bundler hanya menangani import statis. `import()` dinamis
-  dan siklus impor dapat menghasilkan `undefined` saat inisialisasi modul.
-- **Mitigasi**: Error UnsupportedSyntaxType dilempar eksplisit, bukan diam.
-  Dieskalakan sebagai item roadmap tooling.
-- **Status**: Terbuka
+- **Probabilitas**: Rendah
+- **Dampak**: Rendah
+- **Deskripsi**: ~~Bundler hanya menangani import statis. `import()` dinamis
+  dan siklus impor dapat menghasilkan `undefined` saat inisialisasi modul.~~
+  **Selesai diperbaiki (BNG-048).** Bundler kini menangani siklus modul
+  dan dynamic `import()`.
+- **Mitigasi**: Bundler mendaftarkan modul sebelum membaca dependensinya,
+  memakai cache modul bersama, dan codegen memakai **live binding**
+  (`const _$$modN = require(...)`, dibaca dari `module.exports` saat
+  dipakai) sehingga nilai modul siklik tidak terkunci `undefined`.
+  Dynamic `import()` punya node AST `ImportExpression` dan helper
+  `_$$dynamicImport`; modul yang diimpor dinamis ikut ter-bundle.
+  Sisa batasan: path `import()` harus string literal (L-34).
+  Dikunci 10 test di `tests/tools/module-graph.test.js`.
+- **Status**: Ditutup (BNG-048)
 
 ---
 
@@ -179,9 +187,15 @@ Status: `Ter mitigating`, `Ter mitigated`, `Diterima`, `Terbuka`.
 - **Probabilitas**: Sedang
 - **Dampak**: Rendah
 - **Deskripsi**: Cache-first untuk aset statis berarti deploy baru tidak
-  langsung terlihat pengguna yang sudah pernahmukis.
+  langsung terlihat pengguna yang sudah pernah buka.
 - **Mitigasi**: Versi cache di-key pada build hash; API tetap network-first.
-- **Status**: Ter mitigating
+  **Sudah diperkuat (BNG-043).** `bonang build` menghasilkan
+  `precache-manifest.json` (hash SHA-256 per aset) dan
+  `CacheInvalidator` menyediakan `prune`, `matchFresh`, dan `store` —
+  hanya file yang berubah yang di-refresh, bukan seluruh cache.
+  Dikunci 8 test di `tests/tools/sw-cache.test.js`, plus verifikasi di
+  Chrome sungguhan lewat DevTools Protocol.
+- **Status**: Ter mitigating (diperkuat BNG-043)
 
 ---
 
@@ -205,6 +219,7 @@ Status: `Ter mitigating`, `Ter mitigated`, `Diterima`, `Terbuka`.
 | Prioritas | Risiko |
 | --- | --- |
 | Tinggi | R-01 (Node), R-05 (SQLite skala), R-09 (clustering) |
-| Sedang | R-02 (tipe), R-04 (sqlite sinkron), R-06 (konflik), R-07 (bundler), R-11 (type checker), R-12 (pemeliharaan), R-15 (benchmark) |
+| Sedang | R-02 (tipe), R-04 (sqlite sinkron), R-06 (konflik), R-11 (type checker), R-12 (pemeliharaan), R-15 (benchmark) |
 | Rendah | R-08 (dua runner), R-10 (registry privat), R-14 (cache aset) |
 | Sudah dimitigasi | R-03 (backlog), R-13 (kriptografi) |
+| Ditutup | R-07 (bundler: siklus modul & dynamic import — BNG-048) |

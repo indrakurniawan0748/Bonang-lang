@@ -271,7 +271,7 @@ Folder `src/shared/` masuk ke kedua bundle.
 | --- | --- |
 | `cli/cli.js` | Orkestrasi perintah |
 | `cli/linter.js` | 9 aturan statis |
-| `cli/auditor.js` | 6 pemeriksaan keamanan |
+| `cli/auditor.js` | 8 pemeriksaan keamanan (4 berbasis AST) |
 | `cli/migrate.js` | Runner migrasi + rollback |
 | `cli/dev-server.js` | Dev server + hot reload (SSE) |
 | `benchmarks/benchmark.js` | 5 skenario + baseline PHP/Node |
@@ -295,5 +295,6 @@ Folder `src/shared/` masuk ke kedua bundle.
 - Runtime Bonang masih berupa JavaScript yang diekspos lewat bridge (lihat
   §3.2).
 - Tidak ada clustering; satu proses per server.
-- Bundler hanya menangani import statis.
 - Type checker belum ada.
+- Dynamic `import()` hanya menerima path string literal — path yang
+  dihitung saat runtime tidak bisa ditemukan saat build (L-34).

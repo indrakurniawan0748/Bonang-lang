@@ -63,8 +63,8 @@ manager, CLI, dan aplikasi CRUD demo dengan offline-first.
 - `init`, `run`, `build`, `dev`, `test`, `lint`, `audit`, `bench`,
   `migrate`, `version` — semuanya berfungsi, bukan placeholder.
 - `dev-server.js` — dev server dengan hot reload via SSE.
-- `linter.js` — 10 aturan analisis statis.
-- `auditor.js` — 8 pemeriksaan keamanan, lima di antaranya berbasis AST.
+- `linter.js` — 9 aturan analisis statis.
+- `auditor.js` — 8 pemeriksaan keamanan, empat di antaranya berbasis AST.
 - `migrate.js` — runner migrasi dengan tabel `bonang_migrations`, rollback.
 
 **Aplikasi demo**

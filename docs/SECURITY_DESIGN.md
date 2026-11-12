@@ -185,7 +185,7 @@ Aturan: detail internal tidak pernah sampai ke user di produksi.
 
 ## 12. Audit Statis (`bonang audit`)
 
-Tujuh pemeriksaan. Empat di antaranya berbasis analisis AST, bukan pencocokan
+Delapan pemeriksaan. Empat di antaranya berbasis analisis AST, bukan pencocokan
 teks, agar bisa membedakan konstanta program dari data yang berasal dari
 user:
 
@@ -194,6 +194,7 @@ user:
 | Hardcoded secret | Pola `password`/`secret`/`api_key` bernilai literal | Regex per baris |
 | SQL injection (gabungan) | String SQL yang digabungkan operator `+` | Regex per baris |
 | SQL injection (template) | Template literal berisi SQL yang menginterpolasi data user | AST: interpolasi aman hanya bila nilainya konstanta program |
+| SQL mentah | `whereRaw`/`having` dengan SQL tambahan atau jumlah placeholder yang tidak cocok | AST |
 | XSS | `innerHTML`, `insertAdjacentHTML`, `document.write` tanpa escaping | Regex per baris |
 | Path traversal | Pembacaan/penulisan file dengan path dari input user | Regex per baris |
 | Route tanpa validasi | Route mutating yang tidak memvalidasi input | AST: receiver harus router-like, validasi dicek sampai ke delegasi method/service |
@@ -229,8 +230,11 @@ rangkaian yang aman.
 
 - Receiver route dikenali dari namanya (`router`, `*router`, `app`,
   `server`, `api`). Router dengan nama lain tidak dikenali.
-- `whereRaw`/`having` menerima SQL mentah — keduanya tidak dianalisis
-  oleh auditor.
+- `whereRaw`/`having` menerima SQL mentah — keduanya tidak bisa
+  diparameterkan seluruhnya. Yang diperiksa auditor adalah bentuk yang
+  tetap aman: memakai placeholder `?` dengan jumlah parameter yang
+  cocok. SQL mentah yang menambah statement atau salah jumlah
+  placeholder dilaporkan.
 - Nama fungsi validasi dikenali dari polanya
   (`validate*`, `readBody`, `readJson`, `assertBody`, `parseId`).
   Validasi dengan nama lain bisa terlewat.
@@ -268,15 +272,18 @@ Perintah keluar dengan status 1 bila ada temuan `critical` atau `high`.
 
 ## 15. Pengujian
 
-`tests/security/security.test.js` — 35 test menutupi seluruh bagian di atas:
+`tests/security/security.test.js` — 55 test menutupi seluruh bagian di atas:
 password, timing-safe compare, token, HMAC, CSRF, escape, sanitasi, path,
 upload, rate limiter, session.
 
-`tests/database/database.test.js` — 19 test, termasuk injeksi SQL via
+`tests/database/database.test.js` — 32 test, termasuk injeksi SQL via
 placeholder, allowlist identifier, allowlist operator, dan allowlist
 JOIN (jenis JOIN serta kondisi JOIN).
 
-`tests/tools/auditor.test.js` — 11 test mengunci perilaku auditor:
+`tests/database/soft-delete.test.js` — 15 test, termasuk penolakan nama
+tabel/kolom berbahaya pada `SoftDeleteRepository`.
+
+`tests/tools/auditor.test.js` — 16 test mengunci perilaku auditor:
 konstanta program tidak dilaporkan sebagai injeksi, parameter constructor
 tetap dilaporkan, `store.put` bukan route, route yang memvalidasi lewat
 delegasi tidak dilaporkan, dan empat aturan lain tetap bekerja.

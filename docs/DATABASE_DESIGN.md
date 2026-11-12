@@ -158,6 +158,11 @@ Metadata `paginate`:
 const IDENTIFIER_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 ```
 
+Pola ini hidup di satu tempat saja —
+`runtime/database/identifiers.js` — dan dipakai bersama oleh query
+builder dan soft delete, sehingga tidak ada dua implementasi aturan
+validasi yang bisa berbeda satu sama lain.
+
 - `*` diizinkan untuk kolom COUNT.
 - Segera di lempar bila tidak cocok.
 - Nama yang cocok: `items`, `user_id`, `created_at`.
@@ -283,26 +288,94 @@ class ProductRepository {
 
 ## 10. Pengujian
 
-`tests/database/database.test.js` — 17 test:
+`tests/database/database.test.js` — 32 test:
 
 - Pool: membuat skema, batas koneksi, antrean menunggu, penolakan setelah
   ditutup, statistik.
 - Transaksi: commit, rollback, bulk insert, pengembalian koneksi.
 - Placeholder: isolasi nilai dari SQL, wildcard LIKE aman.
 - Query builder: select/count/paginate, allowlist identifier, allowlist
-  operator, shorthand `where`.
+  operator, shorthand `where`, JOIN (jenis + kondisi).
 - Integritas: kolom NOT NULL menolak nilai kosong.
+- Raw SQL: `whereRaw`/`having` menolak statement tambahan dan jumlah
+  placeholder yang tidak cocok.
+- Keyset pagination: halaman pertama tanpa cursor, tidak ada baris yang
+  terlewat atau terduplikasi, arah `DESC`, cursor berisi payload injeksi
+  diperlakukan sebagai data.
+
+`tests/database/soft-delete.test.js` — 15 test: penambahan kolom penanda
+(idempoten), `remove` menandai tanpa menghapus, penyaringan pada `findAll`
+dan `findById`, opsi `includeDeleted`, penghitungan baris aktif vs
+terhapus, `restore`, `purge`, `purgeAll`, serta penolakan nama tabel dan
+kolom berbahaya.
 
 ---
 
-## 11. Batasan yang Diketahui
+## 11. Fitur Soft Delete
+
+`runtime/database/soft-delete.js` menyediakan lapisan soft delete di atas
+pool, terpisah dari query builder.
+
+```js
+const { createPool, db } = require("bonang");
+
+const pool = createPool({ filename: "data/app.db" });
+const repo = db.softDelete(pool, "products");
+
+await repo.ensureSoftDeleteColumn();   // ALTER TABLE ... ADD COLUMN deleted_at TEXT
+await repo.create({ name: "Kopi", price: 85000 });
+await repo.remove(1);                  // UPDATE ... SET deleted_at = ? (baris tetap ada)
+await repo.findAll();                  // hanya baris aktif
+await repo.findAll({ includeDeleted: true });
+await repo.restore(1);                 // deleted_at = NULL
+await repo.purge(1);                   // DELETE permanen
+```
+
+| API | Perilaku |
+| --- | --- |
+| `ensureSoftDeleteColumn()` | Menambah kolom penanda bila belum ada; idempoten. Mengembalikan `true` bila kolom baru ditambahkan. |
+| `remove(id)` | Menandai baris terhapus. `false` bila id tidak ada atau sudah terhapus. |
+| `restore(id)` | Mengosongkan kolom penanda. `false` bila id tidak ada. |
+| `purge(id)` | Menghapus baris secara permanen. |
+| `purgeAll()` | Menghapus semua baris yang ditandai terhapus. |
+| `findAll(options)` | `includeDeleted: true` meloloskan baris terhapus. Mendukung `limit`/`offset`. |
+| `findById(id, options)` | Sama seperti `findAll` untuk satu baris. |
+| `countActive()` / `countDeleted()` | Menghitung baris aktif dan terhapus secara terpisah. |
+
+**Batasan yang disengaja.** Kolom penanda **tidak** dibuat otomatis —
+`ensureSoftDeleteColumn()` harus dipanggil eksplisit, supaya kueri
+tidak pernah mengubah skema tabel pengguna tanpa sepengetahuan. Query
+biasa juga **tidak** memfilter otomatis: baris terhapus yang lolos ke
+pemanggil lebih mudah dikenali daripada baris yang menghilang tanpa
+jejak.
+
+Nama tabel dan kolom divalidasi lewat `assertIdentifier()` yang sama
+dengan query builder (`runtime/database/identifiers.js`), sehingga tidak
+ada dua implementasi aturan berbeda.
+
+### 11.1 Pagination Keyset
+
+Query builder punya `paginateByCursor()` untuk pagination dua kolom
+(kolom utama + kolom penyeimbang), sehingga halaman berikutnya tidak
+melompati maupun menggandakan baris dengan nilai pengurutan yang sama.
+Cursor berisi parameter terenkripsi secara aman.
+
+---
+
+## 12. Batasan yang Diketahui
 
 1. SQLite — satu file, satu writer. Tidak cocok untuk multi-host.
 2. `node:sqlite` sinkron — query panjang memblokir event loop.
-3. Belum ada ORM atau migrasi otomatis (schema diff).
-4. Belum ada soft delete.
-5. Belum ada pagination berbasis keyset (hanya offset).
-6. Belum ada enkripsi at-rest.
-7. Query builder sudah mendukung JOIN sederhana (`.join('orders', 'orders.product_id', 'products.id')`), tetapi belum mendukung JOIN bertipe (LEFT/RIGHT/FULL), subquery pada klausa FROM, maupun agregasi per-tabel hasil join.
-8. Query builder belum mendukung `GROUP BY` yang digabung dengan `HAVING` bertingkat pada ekspresi agregat yang sama.
-9. Belum ada pooling antar-proses — pool hanya berlaku di dalam satu proses Node.js.
+3. Belum ada ORM atau migrasi otomatis (schema diff) — L-13.
+4. Belum ada enkripsi at-rest — L-16.
+5. Query builder sudah mendukung JOIN sederhana
+   (`.join('orders', 'orders.product_id', 'products.id')`), tetapi belum
+   mendukung JOIN bertipe (LEFT/RIGHT/FULL), subquery pada klausa FROM,
+   maupun agregasi per-tabel hasil join.
+6. Query builder belum mendukung `GROUP BY` yang digabung dengan `HAVING`
+   bertingkat pada ekspresi agregat yang sama.
+7. Belum ada pooling antar-proses — pool hanya berlaku di dalam satu
+   proses Node.js.
+8. Soft delete hanya untuk tabel dengan kolom penanda `deleted_at`; tabel
+   tanpa kolom itu tidak otomatis mendapatkannya demi demi kueri yang
+   tidak mengubah skema pengguna secara diam-diam.

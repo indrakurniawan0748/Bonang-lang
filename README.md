@@ -20,7 +20,9 @@ Rilis **0.1.0** (2026-11-11). Lengkap dan terverifikasi.
 | --- | --- |
 | Test | 356 lulus, 0 gagal, 0 dilewati |
 | Bug | 48 tercatat, 48 Fixed, 0 Open |
+| Batasan terverifikasi | 24 |
 | Audit statis | 0 temuan pada kode referensi |
+| Audit struktur | 0 siklus dependensi, 0 dead code, 0 duplikasi |
 | Dependensi eksternal | **0** |
 
 Rincian: [`docs/PROJECT_PROGRESS.md`](docs/PROJECT_PROGRESS.md),
@@ -47,10 +49,14 @@ benar-benar berjalan.
 - Melayani HTTP dengan header keamanan bawaan (CSP, `nosniff`,
   `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`) yang dapat
   ditimpa per-route.
+- Menghapus data dengan soft delete yang bisa dipulihkan, dan berpindah
+  halaman dengan keyset pagination yang tidak melompati baris.
+- Menyusun modul yang saling mengimpor, dan memuat modul saat runtime
+  dengan dynamic `import()`.
 
-**Yang belum ada (jujur):** type checker, ORM, soft delete, keyset
-pagination, enkripsi at-rest, sinkronisasi background. Daftar lengkap 26
-batasan: [`docs/KNOWN_LIMITATIONS.md`](docs/KNOWN_LIMITATIONS.md).
+**Yang belum ada (jujur):** type checker statis, ORM dengan schema diff,
+enkripsi at-rest, dan laporan coverage. Daftar lengkap 24 batasan:
+[`docs/KNOWN_LIMITATIONS.md`](docs/KNOWN_LIMITATIONS.md).
 
 ---
 
@@ -209,7 +215,7 @@ Shared hosting PHP biasa tidak bisa menjalankan Bonang.
 | `bonang dev` | Dev server dengan hot reload (SSE) |
 | `bonang test` | Menjalankan test suite Bonang |
 | `bonang lint` | 9 aturan analisis statis |
-| `bonang audit` | 8 pemeriksaan keamanan (AST-based) |
+| `bonang audit` | 8 pemeriksaan keamanan (4 berbasis AST) |
 | `bonang audit --structure` | Audit struktur: siklus dependensi, dead code, duplikasi |
 | `bonang bench` | 5 skenario benchmark |
 | `bonang migrate` | Menjalankan migrasi database |
@@ -361,21 +367,22 @@ Diukur pada Windows 11 / Node v24.21.0, satu mesin:
 
 | Skenario | Throughput |
 | --- | --- |
-| Kompilasi | 4 932 batch/detik |
-| Eksekusi Bonang | 2 873 563 op/detik |
-| Eksekusi Node.js | 2 710 027 op/detik |
-| Eksekusi PHP 8.2 | 339 785 op/detik |
+| Kompilasi | 6 081 batch/detik |
+| Eksekusi Bonang | 2 941 176 op/detik |
+| Eksekusi Node.js | 2 403 846 op/detik |
+| Eksekusi PHP 8.2 | 293 083 op/detik |
 | HTTP p99 @ 1000 request | 471,86 ms |
 
 Angka di atas adalah snapshot satu eksekusi; benchmark pada mesin yang
-sama berfluktuatasi nyata antar-jalankan (compile 4 932-8 213 batch/detik
-pada tiga eksekusi). Yang stabil: rasio Bonang vs Node 1,05x-1,06x.
+sama berfluktuatasi nyata antar-jalankan (compile 4 932-8 486 batch/detik
+pada empat eksekusi). Yang stabil: rasio Bonang vs Node selalu di atas
+1,00 (rentang 1,05x-1,22x).
 
-**Bonang berada pada paritas dengan JavaScript** (rasio 1,06x, masih dalam
-rentang noise antar-jalankan). Klaim keunggulan performa **tidak**
-dibuktikan — Bonang adalah transpiler ke JavaScript, jadi advantage
-struktural tidak mungkin diharapkan. Yang terbukti: paritas dengan Node,
-urutan magnitude di atas PHP, dan event loop yang tidak diblokir I/O.
+**Bonang berada pada paritas dengan JavaScript.** Klaim keunggulan performa
+**tidak** dibuktikan — Bonang adalah transpiler ke JavaScript, jadi
+advantage struktural tidak mungkin diharapkan. Yang terbukti: paritas
+dengan Node, urutan magnitude di atas PHP, dan event loop yang tidak
+diblokir I/O.
 
 Metodologi lengkap: [`benchmarks/RESULTS.md`](benchmarks/RESULTS.md).
 

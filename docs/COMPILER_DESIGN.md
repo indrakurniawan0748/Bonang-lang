@@ -262,5 +262,17 @@ sebagai smoke test kompilasi.
 3. Destructure pattern tidak dieksekusi runtime.
 4. Named export list (`export { a }`) belum didukung.
 5. `namespace` hanya blok-bodied.
-6. Import dinamis dan circular dependency belum ditangani bundler.
-7. Belum ada type checker.
+6. Belum ada type checker.
+
+Yang **sudah** ditangani:
+
+- **Siklus modul antar-file.** Bundler mendaftarkan modul sebelum membaca
+  dependensinya dan mengenali siklus lewat pelacakan stack; codegen memakai
+  **live binding** (`const _$$modN = require(...)`, dibaca dari
+  `module.exports` saat dipakai) supaya nilai modul yang berada di tengah
+  siklus tidak terkunci `undefined`. Lihat BNG-048.
+- **Dynamic `import()`.** Node AST `ImportExpression`, helper
+  `_$$dynamicImport` yang mengembalikan Promise berisi namespace modul,
+  dan modul yang diimpor dinamis ikut ter-bundle. Path harus string
+  literal — path yang dihitung saat runtime ditolak saat kompilasi
+  (L-34).

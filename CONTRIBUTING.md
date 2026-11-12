@@ -28,7 +28,7 @@ satu saja, PR akan ditolak:
 ```bash
 git clone https://github.com/<user>/bonang-lang.git
 cd bonang-lang
-npm test                 # pastikan baseline hijau (250 lulus)
+npm test                 # pastikan baseline hijau (356 lulus)
 ```
 
 Tidak ada `npm install` yang dibutuhkan — proyek ini sengaja **nol
@@ -86,7 +86,7 @@ compiler/      lexer, parser, AST, codegen, bundler
 runtime/       core, async, http, database, security, filesystem, client
 standard-library/
 package-manager/
-cli/           cli, linter, auditor, dev-server, migrate
+cli/           cli, linter, auditor, structure-audit, dev-server, migrate
 apps/          bonang-crud-demo
 examples/
 tests/         unit, integration, regression, offline, concurrency,
@@ -103,8 +103,8 @@ Dua tempat utama:
 
 - `cli/linter.js` — aturan analisis statis. Setiap aturan punya
   `rule` (kode singkat), `severity`, dan `message`.
-- `cli/auditor.js` — pemeriksaan keamanan. Empat di antaranya berbasis
-  AST, bukan regex.
+- `cli/auditor.js` — pemeriksaan keamanan. Delapan pemeriksaan; empat di
+  antaranya berbasis AST, bukan regex.
 
 Wajib menambah test di `tests/tools/` untuk setiap aturan baru —
 termasuk kasus negatif (kode yang benar-benar bermasalah **harus**

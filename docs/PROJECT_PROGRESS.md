@@ -21,17 +21,17 @@ Status yang dipakai: `Pending`, `In Progress`, `Blocked`, `Testing`,
 | 1 | PRD | Completed | 100% | - | `docs/PRD.md` — persona, 5 use case, scope, NFR, model concurrency, kontrak API, risiko. |
 | 2 | Architecture | Completed | 100% | - | 8 dokumen desain selesai (lihat §4). |
 | 3 | Language core | Completed | 100% | 96 unit test pass | Lexer, parser, AST, codegen, driver compiler. |
-| 4 | OOP | Completed | 100% | 35 codegen test pass | Class, inheritance, interface, enum, static, getter/setter, polymorphism. |
-| 5 | Runtime | Completed | 100% | 46 integration test pass | Core, async scheduler, worker pool, HTTP server+router, filesystem, network client. |
-| 6 | Backend | Completed | 100% | 46 integration test pass | Router parametrik, middleware, validasi input, error mapping, graceful shutdown. |
+| 4 | OOP | Completed | 100% | 39 codegen test pass | Class, inheritance, interface, enum, static, getter/setter, polymorphism. |
+| 5 | Runtime | Completed | 100% | 35 integration test pass | Core, async scheduler, worker pool, HTTP server+router, filesystem, network client. |
+| 6 | Backend | Completed | 100% | 35 integration test pass | Router parametrik, middleware, validasi input, error mapping, graceful shutdown. |
 | 7 | Database | Completed | 100% | 47 database test pass | SQLite pool, query builder (allowlist identifier/operator/JOIN), prepared statement positional, keyset pagination, transaksi, migrasi. |
 | 8 | Frontend | Completed | 100% | 28 offline test pass | Runtime client (DOM, IndexedDB, sync queue, BroadcastChannel), bundle client, service worker. |
 | 9 | Offline first | Completed | 100% | 28 offline test pass | IndexedDB store, sync queue (batas 500), background sync, sinkronisasi antar-tab, LWW + optimistic concurrency (baseVersion/409). |
-| 10 | CRUD application | Completed | 100% | 46 integration test pass | Bonang CRUD Demo: Product/ProductRepository/ProductService/ProductController, DB `bonang_demo`. |
+| 10 | CRUD application | Completed | 100% | 12 integration test pass | Bonang CRUD Demo: Product/ProductRepository/ProductService/ProductController, DB `bonang_demo`. |
 | 11 | Benchmark | Completed | 100% | `node cli/cli.js bench` | 5 skenario terukur, hasil di `benchmarks/RESULTS.md`. |
 | 12 | Tooling (CLI) | Completed | 100% | 59 tooling test pass | init/run/build/dev/test/lint/audit/bench/migrate/version semua berfungsi. |
 | 13 | Final audit | Completed | 100% | 356 test + audit statis | `docs/AUDIT_REPORT.md` — 0 temuan terbuka. |
-| 14 | Documentation | Completed | 100% | - | 17 dokumen di `docs/` + `benchmarks/RESULTS.md` + `README.md`. |
+| 14 | Documentation | Completed | 100% | - | 19 dokumen di `docs/` + `benchmarks/RESULTS.md` + `README.md`. |
 
 ---
 
@@ -61,8 +61,8 @@ Status yang dipakai: `Pending`, `In Progress`, `Blocked`, `Testing`,
 
 **Tooling** (`cli/`)
 - `cli.js` — 10 perintah yang benar-benar berfungsi.
-- `linter.js` — 10 aturan.
-- `auditor.js` — 7 pemeriksaan, 4 berbasis AST.
+- `linter.js` — 9 aturan.
+- `auditor.js` — 8 pemeriksaan, 4 berbasis AST.
 - `dev-server.js` — hot reload via SSE.
 - `migrate.js` — runner migrasi + rollback.
 
@@ -92,23 +92,23 @@ Masalah ditemukan: 0
 
 ### 2.3 Angka terukur
 
-Snapshot satu eksekusi `bonang bench` (04:46 UTC). Benchmark pada mesin
-yang sama punya variance antar-jalankan yang besar — rentang tiga
+Snapshot satu eksekusi `bonang bench` (07:43 UTC). Benchmark pada mesin
+yang sama punya variance antar-jalankan yang besar — rentang empat
 eksekusi tercatat di `benchmarks/RESULTS.md` §8.3. Yang robust di
-semua eksekusi: rasio Bonang vs Node tetap 1,05x-1,06x (paritas) dan
+semua eksekusi: rasio Bonang vs Node selalu di atas 1,00 (paritas) dan
 uji non-blocking selalu lulus.
 
-| Metrik | Nilai (eksekusi 04:46 UTC) |
+| Metrik | Nilai (eksekusi 07:43 UTC) |
 | --- | --- |
-| Compile | 4 932 batch/detik |
-| Execution | 1 919 386 op/detik |
-| Node baseline | 2 710 027 op/detik |
-| Bonang baseline | 2 873 563 op/detik |
-| Rasio Bonang vs Node | 1,06x (paritas) |
-| PHP baseline | 339 785 op/detik |
-| DB insert / select | 962 / 4 481 op/detik |
+| Compile | 6 081 batch/detik |
+| Execution | 1 934 236 op/detik |
+| Node baseline | 2 403 846 op/detik |
+| Bonang baseline | 2 941 176 op/detik |
+| Rasio Bonang vs Node | 1,22x (paritas; rentang 1,05x-1,22x) |
+| PHP baseline | 293 083 op/detik |
+| DB insert / select | 1 108 / 4 440 op/detik |
 | HTTP p99 @ 1000 req | 471,86 ms (< NFR-03 1000 ms) |
-| HTTP non-blocking check | 2,125 ms (lulus) |
+| HTTP non-blocking check | 2,156 ms (lulus) |
 
 ---
 
